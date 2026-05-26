@@ -39,5 +39,5 @@ st.success("Procesamiento completado. Descarga tu archivo de resultados.")
 CONTACTO Y SOPORTE
 ----------------------------------------------------------
 Para dudas o soporte técnico, contactar a:
-pablo.coronel@pucv.cl
+
 ----------------------------------------------------------
