@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Asistente de Verificación APA 7 · Biblioteca PUCV</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Playfair+Display:wght@700&display=swap');
+
+:root {
+  --navy:   #0d2240;
+  --navy2:  #163459;
+  --gold:   #c9952a;
+  --gold2:  #e8b84b;
+  --cream:  #faf8f4;
+  --paper:  #f2efe9;
+  --border: #d5cfc4;
+  --text:   #1a1a1a;
+  --muted:  #6b6456;
+  --green:  #1a6040;
+  --green-bg:#eaf4ee;
+  --red:    #8b1a1a;
+  --red-bg: #fdf0f0;
+  --blue:   #1a3d6b;
+  --blue-bg:#eef2f9;
+  --amber:  #7a5200;
+  --amber-bg:#fff8e6;
+  --sans:   'IBM Plex Sans', sans-serif;
+  --mono:   'IBM Plex Mono', monospace;
+  --display:'Playfair Display', serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--sans); background: var(--paper); color: var(--text); min-height: 100vh; }
+
+/* HEADER */
+header {
+  background: var(--navy);
+  padding: 0 1.5rem;
+  display: flex; align-items: center; gap: 1rem;
+  height: 58px;
+  border-bottom: 3px solid var(--gold);
+  position: sticky; top: 0; z-index: 100;
+}
+.logo { width:34px;height:34px;background:var(--gold);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);display:flex;align-items:center;justify-content:center;font-family:var(--display);color:var(--navy);font-size:.9rem;font-weight:700;flex-shrink:0; }
+.h-title { font-family:var(--display);color:white;font-size:1rem; }
+.h-sub { font-size:.68rem;color:rgba(255,255,255,.5);font-weight:300;letter-spacing:.03em; }
+.h-badge { margin-left:auto;background:rgba(201,149,42,.15);border:1px solid rgba(201,149,42,.35);color:var(--gold2);font-family:var(--mono);font-size:.62rem;padding:.2rem .55rem;border-radius:3px;letter-spacing:.04em; }
+
+/* PROGRESS BAR - sticky top */
+.global-progress {
+  height: 3px;
+  background: var(--paper);
+  position: sticky; top: 58px; z-index: 99;
+}
+.global-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold), var(--navy));
+  width: 0%;
+  transition: width .4s ease;
+}
+
+.container { max-width: 960px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+
+/* SETUP PANEL */
+.setup-panel {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+.setup-title {
+  font-family: var(--display);
+  font-size: 1.1rem;
+  color: var(--navy);
+  margin-bottom: 1rem;
+  padding-bottom: .6rem;
+  border-bottom: 1px solid var(--border);
+}
+.upload-row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin-bottom: .9rem; }
+@media(max-width:580px){ .upload-row{grid-template-columns:1fr;} }
+
+.upload-zone {
+  border: 1.5px dashed var(--border);
+  border-radius: 7px;
+  padding: 1rem;
+  cursor: pointer;
+  position: relative;
+  transition: border-color .2s, background .2s;
+}
+.upload-zone:hover { border-color: var(--gold); background: #fffdf7; }
+.upload-zone.ok { border-style:solid; border-color:var(--green); background:var(--green-bg); }
+.upload-zone input { position:absolute;inset:0;opacity:0;cursor:pointer; }
+.upload-lbl { font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em; }
+.upload-desc { font-size:.75rem;color:var(--muted);margin-top:.2rem; }
+.upload-st { font-size:.72rem;font-family:var(--mono);color:var(--green);margin-top:.35rem;font-weight:500; }
+
+.config-strip { display:flex;gap:1rem;align-items:center;flex-wrap:wrap; }
+.cfg-item { display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--muted); }
+.cfg-item select { border:1px solid var(--border);border-radius:4px;padding:.3rem .5rem;font-family:var(--sans);font-size:.78rem;background:white;color:var(--text); }
+
+.btn-run {
+  margin-left: auto;
+  background: var(--navy); color: white;
+  border: none; padding: .6rem 1.4rem;
+  font-family: var(--sans); font-size: .85rem; font-weight: 600;
+  border-radius: 5px; cursor: pointer;
+  transition: background .2s;
+}
+.btn-run:hover { background: var(--navy2); }
+.btn-run:disabled { opacity:.35; cursor:not-allowed; }
+
+/* STATS BAR */
+.stats-bar {
+  display: none;
+  background: var(--navy);
+  border-radius: 8px;
+  padding: .7rem 1.1rem;
+  margin-bottom: 1rem;
+  gap: 1.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.stats-bar.show { display: flex; }
+.stat-item { text-align: center; }
+.stat-n { font-family:var(--display);font-size:1.4rem;color:white;line-height:1; }
+.stat-n.g { color: #6ee7a8; }
+.stat-n.r { color: #f9a0a0; }
+.stat-n.a { color: var(--gold2); }
+.stat-lbl { font-size:.62rem;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.05em; }
+.stat-divider { width:1px;background:rgba(255,255,255,.15);align-self:stretch; }
+
+.export-btn {
+  margin-left: auto;
+  background: var(--gold); color: var(--navy);
+  border: none; padding: .45rem 1rem;
+  font-family: var(--sans); font-size: .78rem; font-weight: 700;
+  border-radius: 5px; cursor: pointer;
+}
+.export-btn:hover { background: var(--gold2); }
+.export-btn:disabled { opacity:.4; cursor:not-allowed; }
+
+/* FILTER ROW */
+.filter-row {
+  display: none;
+  gap: .5rem; margin-bottom: .75rem; align-items: center; flex-wrap: wrap;
+}
+.filter-row.show { display: flex; }
+.f-input {
+  border: 1px solid var(--border); border-radius: 5px;
+  padding: .4rem .7rem; font-family:var(--sans); font-size:.8rem;
+  background:white; flex:1; min-width:180px;
+}
+.chip {
+  padding:.28rem .7rem; border-radius:99px; font-size:.72rem; font-weight:600;
+  border:1px solid var(--border); background:white; color:var(--muted);
+  cursor:pointer; transition:all .15s; white-space:nowrap;
+}
+.chip.on { background:var(--navy); border-color:var(--navy); color:white; }
+
+/* EMPTY */
+.empty {
+  text-align:center; padding:3.5rem 1rem; color:var(--muted);
+}
+.empty-icon { font-size:2.8rem; margin-bottom:.75rem; }
+.empty-t { font-family:var(--display);font-size:1.15rem;color:var(--navy);margin-bottom:.35rem; }
+.empty-s { font-size:.83rem; }
+
+/* ══ REVIEW CARDS ══ */
+.review-list { display: flex; flex-direction: column; gap: .85rem; }
+
+.ref-card {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow: hidden;
+  transition: box-shadow .2s;
+}
+.ref-card:hover { box-shadow: 0 2px 12px rgba(13,34,64,.07); }
+.ref-card.resolved-ok   { border-color: var(--green); }
+.ref-card.resolved-no   { border-color: #c8b8b8; }
+.ref-card.resolved-manual { border-color: var(--gold); }
+
+/* card top strip */
+.card-header {
+  padding: .7rem 1rem;
+  display: flex; align-items: flex-start; gap: .6rem;
+  border-bottom: 1px solid var(--paper);
+  background: var(--cream);
+}
+.card-num { font-family:var(--mono);font-size:.7rem;color:var(--muted);padding-top:.1rem;flex-shrink:0; }
+.card-ref { font-size:.8rem;line-height:1.5;flex:1; }
+.card-tipo { flex-shrink:0; }
+.tipo-pill {
+  display:inline-block;padding:.15rem .5rem;border-radius:99px;
+  font-size:.65rem;font-weight:700;background:var(--paper);
+  color:var(--muted);border:1px solid var(--border);white-space:nowrap;
+}
+.card-status {
+  flex-shrink:0; font-size:.72rem; font-weight:600; padding:.2rem .55rem;
+  border-radius:4px; white-space:nowrap;
+}
+.st-pending  { background:var(--paper);   color:var(--muted); }
+.st-found    { background:var(--green-bg); color:var(--green); }
+.st-notfound { background:#f5efef; color:#7a4444; }
+.st-manual   { background:var(--amber-bg); color:var(--amber); }
+
+/* candidates area */
+.card-body { padding: .75rem 1rem; }
+.candidates-title { font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.5rem; }
+
+.candidates { display: flex; flex-direction: column; gap: .4rem; }
+
+.candidate {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .55rem .75rem;
+  display: flex; align-items: center; gap: .75rem;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+  background: white;
+}
+.candidate:hover { border-color: var(--navy); background: var(--blue-bg); }
+.candidate.selected { border-color: var(--green); background: var(--green-bg); }
+
+.cand-score {
+  font-family: var(--mono); font-size: .72rem; font-weight: 700;
+  color: white; background: var(--muted);
+  padding: .15rem .4rem; border-radius: 3px;
+  flex-shrink: 0; min-width: 36px; text-align: center;
+}
+.cand-score.high { background: var(--green); }
+.cand-score.med  { background: var(--amber); }
+.cand-score.low  { background: var(--red); }
+
+.cand-info { flex: 1; min-width: 0; }
+.cand-titulo { font-size:.8rem;font-weight:500;color:var(--text);line-height:1.3; white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.cand-meta { font-size:.7rem;color:var(--muted);margin-top:.1rem; }
+
+.cand-ejemplares {
+  font-family:var(--mono);font-size:.85rem;font-weight:700;color:var(--navy);
+  flex-shrink:0; text-align:right;
+}
+.cand-ejemplares span { display:block;font-size:.62rem;font-weight:400;color:var(--muted); }
+
+/* card actions */
+.card-actions {
+  padding: .5rem 1rem .65rem;
+  display: flex; gap: .5rem; flex-wrap: wrap; align-items: center;
+}
+.btn-confirm {
+  background: var(--navy); color: white;
+  border:none; padding:.38rem .85rem;
+  font-family:var(--sans); font-size:.75rem; font-weight:600;
+  border-radius:4px; cursor:pointer; transition:background .15s;
+}
+.btn-confirm:hover { background:var(--green); }
+.btn-notfound {
+  background:transparent; color:var(--muted);
+  border:1px solid var(--border); padding:.36rem .8rem;
+  font-family:var(--sans); font-size:.75rem; font-weight:500;
+  border-radius:4px; cursor:pointer; transition:all .15s;
+}
+.btn-notfound:hover { border-color:var(--red);color:var(--red); }
+.btn-undo {
+  background:transparent; color:var(--muted);
+  border:1px solid var(--border); padding:.36rem .7rem;
+  font-family:var(--sans); font-size:.72rem;
+  border-radius:4px; cursor:pointer;
+}
+.btn-undo:hover { background:var(--paper); }
+.link-search {
+  margin-left:auto; font-size:.73rem; color:var(--blue);
+  text-decoration:none; display:flex;align-items:center;gap:.25rem;
+  border:1px solid #c5d3e8; border-radius:4px; padding:.32rem .6rem;
+  background:var(--blue-bg); transition:background .15s;
+}
+.link-search:hover { background:#d8e4f4; }
+
+/* resolved overlay */
+.resolved-banner {
+  display: none;
+  padding: .5rem 1rem;
+  font-size: .78rem; font-weight: 600;
+  border-top: 1px solid var(--border);
+}
+.resolved-banner.show { display: flex; align-items: center; gap: .4rem; }
+.resolved-banner.ok   { color:var(--green); background:var(--green-bg); }
+.resolved-banner.no   { color: #7a4444;    background: #f5efef; }
+.resolved-banner.manual { color:var(--amber); background:var(--amber-bg); }
+
+/* no-candidates message */
+.no-cands { font-size:.78rem;color:var(--muted);font-style:italic;padding:.3rem 0; }
+
+/* debug line */
+.debug-line {
+  font-family: var(--mono); font-size: .68rem; color: var(--amber);
+  background: var(--amber-bg); border-radius: 4px;
+  padding: .3rem .6rem; margin-bottom: .5rem;
+  word-break: break-all;
+}
+
+/* manual search */
+.manual-search-wrap {
+  margin-top: .85rem;
+  border-top: 1px dashed var(--border);
+  padding-top: .7rem;
+}
+.manual-label { font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.4rem; }
+.manual-input {
+  width: 100%; border: 1px solid var(--border); border-radius: 5px;
+  padding: .42rem .7rem; font-family: var(--sans); font-size: .8rem;
+  background: white; color: var(--text);
+  transition: border-color .15s;
+}
+.manual-input:focus { outline: none; border-color: var(--navy); }
+.manual-results { margin-top: .4rem; display: flex; flex-direction: column; gap: .35rem; }
+
+/* tipo biblio toggle */
+.tipo-toggle { display:flex;gap:.3rem;margin-top:.3rem; }
+.tipo-btn {
+  font-size:.68rem;font-weight:700;padding:.2rem .55rem;border-radius:3px;
+  border:1px solid var(--border);background:white;color:var(--muted);cursor:pointer;
+  transition:all .15s;
+}
+.tipo-btn.oblig.on  { background:#e8f4ed;border-color:var(--green);color:var(--green); }
+.tipo-btn.compl.on  { background:#eef2f9;border-color:var(--blue);color:var(--blue); }
+
+/* planilla fields */
+.planilla-fields {
+  display:grid;grid-template-columns:1fr 1fr 2fr;gap:.5rem;
+  margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--border);
+}
+.pf-group { display:flex;flex-direction:column;gap:.25rem; }
+.pf-label { font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted); }
+.pf-input {
+  border:1px solid var(--border);border-radius:4px;padding:.35rem .6rem;
+  font-family:var(--sans);font-size:.8rem;background:white;color:var(--text);
+}
+@media(max-width:580px){ .planilla-fields{grid-template-columns:1fr;} }
+.art-link {
+  font-size:.75rem; color:var(--blue); text-decoration:none;
+  border:1px solid #c5d3e8; border-radius:4px; padding:.32rem .65rem;
+  background:var(--blue-bg); display:flex;align-items:center;gap:.3rem;
+}
+.art-link:hover { background:#d8e4f4; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">B</div>
+  <div>
+    <div class="h-title">Asistente de Verificación APA 7</div>
+    <div class="h-sub">Sistema de Bibliotecas · PUCV</div>
+  </div>
+  <div class="h-badge">v3.0 · revisión humana</div>
+</header>
+<div class="global-progress"><div class="global-progress-fill" id="gProgress"></div></div>
+
+<div class="container">
+
+  <!-- SETUP -->
+  <div class="setup-panel" id="setupPanel">
+    <div class="setup-title">Cargar archivos</div>
+    <div class="upload-row">
+      <div class="upload-zone" id="zoneRefs">
+        <input type="file" accept=".csv" onchange="onFileRefs(event).catch(console.error)"/>
+        <div class="upload-lbl">📄 Referencias</div>
+        <div class="upload-desc">CSV con columna <code>referencia</code></div>
+        <div class="upload-st" id="stRefs"></div>
+      </div>
+      <div class="upload-zone" id="zoneCat">
+        <input type="file" accept=".csv" onchange="onFileCat(event).catch(console.error)"/>
+        <div class="upload-lbl">📚 Catálogo KOHA</div>
+        <div class="upload-desc">CSV con <code>titulo, autor, ano, numero_ejemplares</code></div>
+        <div class="upload-st" id="stCat"></div>
+      </div>
+    </div>
+    <div class="config-strip">
+      <div class="cfg-item">
+        <label>Candidatos por referencia:</label>
+        <select id="nCandidatos">
+          <option value="3" selected>3</option>
+          <option value="5">5</option>
+        </select>
+      </div>
+      <div class="cfg-item">
+        <label>Búsqueda por:</label>
+        <select id="modoMatch">
+          <option value="autor_titulo" selected>Autor + título</option>
+          <option value="titulo">Solo título</option>
+        </select>
+      </div>
+      <button class="btn-run" id="btnRun" disabled onclick="procesar()">▶ Iniciar revisión</button>
+    </div>
+    <div class="planilla-fields">
+      <div class="pf-group">
+        <div class="pf-label">Clave asignatura</div>
+        <input class="pf-input" id="inClave" placeholder="Ej: MAT101"/>
+      </div>
+      <div class="pf-group">
+        <div class="pf-label">Nombre asignatura</div>
+        <input class="pf-input" id="inAsignatura" placeholder="Ej: Cálculo I"/>
+      </div>
+      <div class="pf-group">
+        <div class="pf-label">Carrera o programa</div>
+        <input class="pf-input" id="inCarrera" placeholder="Ej: Ingeniería Civil"/>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATS BAR -->
+  <div class="stats-bar" id="statsBar">
+    <div class="stat-item"><div class="stat-n" id="sTotal">0</div><div class="stat-lbl">Total</div></div>
+    <div class="stat-divider"></div>
+    <div class="stat-item"><div class="stat-n g" id="sOk">0</div><div class="stat-lbl">Confirmados</div></div>
+    <div class="stat-item"><div class="stat-n r" id="sNo">0</div><div class="stat-lbl">No encontrados</div></div>
+    <div class="stat-item"><div class="stat-n a" id="sPend">0</div><div class="stat-lbl">Pendientes</div></div>
+    <div class="stat-divider"></div>
+    <button class="export-btn" id="btnExport" disabled onclick="exportar()">↓ Exportar planilla</button>
+  </div>
+
+  <!-- FILTERS -->
+  <div class="filter-row" id="filterRow">
+    <input class="f-input" id="fText" placeholder="Buscar en referencias..." oninput="filtrar()"/>
+    <div class="chip on" id="cTodos"    onclick="setChip('todos')">Todos</div>
+    <div class="chip"    id="cPend"     onclick="setChip('pend')">⏳ Pendientes</div>
+    <div class="chip"    id="cOk"       onclick="setChip('ok')">✓ Confirmados</div>
+    <div class="chip"    id="cNo"       onclick="setChip('no')">✗ No encontrados</div>
+  </div>
+
+  <!-- CARDS -->
+  <div class="review-list" id="reviewList"></div>
+
+  <!-- EMPTY -->
+  <div class="empty" id="emptyState">
+    <div class="empty-icon">📖</div>
+    <div class="empty-t">Carga los archivos para comenzar</div>
+    <div class="empty-s">Sube el CSV de referencias y el catálogo KOHA,<br/>luego presiona <strong>Iniciar revisión</strong>.</div>
+  </div>
+
+</div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────
+let dfRefs = [], dfCat = [], items = [], chipActivo = 'todos';
+
+// ── ENCODING / CSV ────────────────────────────────────
+const COL_MAP = {
+  titulo:            ['titulo','title','245a','245','nombre','ttl','titulo_del_libro'],
+  autor:             ['autor','author','100a','100','autores','autor_principal'],
+  ano:               ['ano','anio','year','fecha','date','publicacion','anio_publicacion'],
+  numero_ejemplares: ['numero_ejemplares','ejemplares','copies','items','cantidad','copias','num_ejemplares'],
+  referencia:        ['referencia','reference','ref','cita','bibliografia','apa','fuente']
+};
+
+function normCol(c) {
+  return c.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'');
+}
+function resolverRow(row) {
+  const out = {};
+  Object.keys(row).forEach(k => { out[normCol(k)] = (row[k]||'').trim(); });
+  Object.entries(COL_MAP).forEach(([canon, aliases]) => {
+    if(out[canon]!==undefined) return;
+    for(const a of aliases) if(out[a]!==undefined){ out[canon]=out[a]; break; }
+  });
+  return out;
+}
+function leerTexto(file, enc){ return new Promise((r,j)=>{ const fr=new FileReader(); fr.onload=e=>r(e.target.result); fr.onerror=j; fr.readAsText(file,enc); }); }
+async function detectEnc(file){ const t=await leerTexto(file,'UTF-8'); return (t.includes('\uFFFD')||/[\x80-\x9F]/.test(t))?'windows-1252':'UTF-8'; }
+async function parseCSV(file){
+  const enc=await detectEnc(file);
+  const txt=await leerTexto(file,enc);
+  return new Promise(res=>Papa.parse(txt,{header:true,skipEmptyLines:true,complete:r=>res({rows:r.data.map(resolverRow),enc})}));
+}
+
+async function onFileRefs(e){
+  const f=e.target.files[0]; if(!f) return;
+  document.getElementById('stRefs').textContent='⏳ Leyendo...';
+  const {rows,enc}=await parseCSV(f);
+  dfRefs=rows;
+  const ok=rows[0]&&rows[0].referencia!==undefined;
+  document.getElementById('stRefs').textContent=`✓ ${rows.length} filas · ${enc}${ok?'':' ⚠ sin col referencia'}`;
+  document.getElementById('zoneRefs').classList.add('ok');
+  checkReady();
+}
+async function onFileCat(e){
+  const f=e.target.files[0]; if(!f) return;
+  document.getElementById('stCat').textContent='⏳ Leyendo...';
+  const {rows,enc}=await parseCSV(f);
+  dfCat=rows.map(r=>({...r,ano:parseInt(r.ano)||0,numero_ejemplares:parseInt(r.numero_ejemplares)||1}));
+  const cols=['titulo','autor','ano','numero_ejemplares'].filter(c=>dfCat[0]&&dfCat[0][c]!==undefined);
+  document.getElementById('stCat').textContent=`✓ ${dfCat.length} registros · ${enc} · ${cols.join(', ')}`;
+  document.getElementById('zoneCat').classList.add('ok');
+  checkReady();
+}
+function checkReady(){ document.getElementById('btnRun').disabled=!(dfRefs.length&&dfCat.length); }
+
+// ── NORMALIZACIÓN ─────────────────────────────────────
+const STOP=new Set(['de','del','la','el','los','las','un','una','y','en','a','para','por','al','con','su','sus','lo','se','que','the','of','and','in','an']);
+function norm(t){
+  if(!t) return '';
+  return t.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/([a-z])(\d)/g,'$1 $2').replace(/(\d)([a-z])/g,'$1 $2') // "calculo1"→"calculo 1"
+    .replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+}
+function tokens(s){ return s.split(' ').filter(t=>t.length>1&&!STOP.has(t)); }
+
+// cobertura(refStr, catStr, autorConfirmado)
+// Con autor confirmado: max(covRef, covCat) → "Cálculo 1" en catálogo matchea "Cálculo 1. Potenciando..." en ref
+// Sin autor: sqrt(covRef * covCat) → media geométrica, penaliza asimetría extrema
+function cobertura(refStr, catStr, autorConfirmado=false){
+  const tRef=tokens(refStr), tCat=tokens(catStr);
+  if(!tRef.length||!tCat.length) return 0;
+  const sRef=new Set(tRef), sCat=new Set(tCat);
+  const inter=[...sRef].filter(t=>sCat.has(t)).length;
+  const covRef=inter/tRef.length; // ¿cuánto de la ref está en el catálogo?
+  const covCat=inter/tCat.length; // ¿cuánto del catálogo está en la ref?
+  if(autorConfirmado){
+    // Autor ya validado → usar el máximo de ambas direcciones
+    return Math.max(covRef, covCat);
+  } else {
+    // Sin autor → media geométrica (exige cobertura en ambas direcciones)
+    return Math.sqrt(covRef*covCat);
+  }
+}
+
+// ── CLASIFICADOR ─────────────────────────────────────
+function clasificar(ref){
+  const r=ref.toLowerCase();
+  if(/\(\d{4}\).*?\d+(\(\d+\))?.*\d+[–\-]\d+/.test(r)&&(r.includes('revista')||r.includes('vol')||/\d+\s*\(\d+\)/.test(r))) return 'Artículo de revista';
+  if(r.includes('tesis')||r.includes('memoria')) return 'Tesis';
+  if(r.includes('congreso')||r.includes('coloquio')||r.includes('ponencia')) return 'Congreso';
+  if(r.includes('recuperado de')||/https?:\/\//.test(r)) return 'Recurso web';
+  if(r.includes(' en ')&&(r.includes('ed.')||r.includes('editor'))) return 'Capítulo de libro';
+  return 'Libro';
+}
+
+// ── EXTRACCIÓN APA ────────────────────────────────────
+const RE_EDIT=/(editorial|editores?|publishers?|press|university|universidad|cepe|mcgraw|pearson|cengage|wiley|springer|elsevier|reverte|prentice|s\.a\.|ltda)/i;
+const RE_EDIC=/^(primera|segunda|tercera|cuarta|quinta|sexta|s[eé]ptima|octava|novena|d[eé]cima|\d+[aª°va]\.?\s*(ed|edic)|\d+(th|nd|rd|st)\s*ed)/i;
+
+// ¿Un segmento parece ser parte del nombre de autor?
+function esSegAutor(s){
+  const w=s.trim().split(/\s+/);
+  if(w.length>5) return false;
+  // Tiene una inicial sola (A. o A)
+  if(w.some(t=>/^[A-ZÁÉÍÓÚÜ]\.?$/.test(t))) return true;
+  // Empieza con conector "y/and/&"
+  if(/^(y|and|&)\s+/i.test(s.trim())) return true;
+  return false;
+}
+
+// Extraer título desde el texto que viene después del año
+function titDesdeTexto(after){
+  const segs=after.split(/\.\s+/);
+  let tit='';
+  for(let i=0;i<segs.length;i++){
+    const s=segs[i].trim(); if(!s) continue;
+    if(i===0){tit=s;continue;}
+    if(RE_EDIT.test(s)||RE_EDIC.test(s)) break;
+    if(/^[A-ZÁÉÍÓÚÜ][a-záéíóúü]+\s*:/.test(s)) break;
+    if(i>2) break;
+    tit+='. '+s;
+  }
+  return tit.trim();
+}
+
+function extraerApa(ref){
+  const r=ref.replace(/[\n\r]/g,' ').replace(/\s{2,}/g,' ').trim();
+
+  // ── Estrategia 1: año entre paréntesis (APA estándar) ──────────────────
+  const mP=r.match(/\(\s*(\d{4}[a-z]?)\s*\)/);
+  if(mP){
+    const anoStr=mP[0], ano=parseInt(mP[1]);
+    const pos=r.indexOf(anoStr);
+    const autor=r.substring(0,pos).replace(/[\.\s,]+$/,'').trim();
+    const after=r.substring(pos+anoStr.length).replace(/^[\.\s,]+/,'').trim();
+    return {autor:autor||null, ano, titulo:titDesdeTexto(after)||null};
+  }
+
+  // ── Estrategia 2: año SIN paréntesis ─────────────────────────────────
+  // Ej: "Spivak, M. Calculus. Tercera Edición 2012.Editorial Reverté."
+  // Ej: "Arancibia S. y Mena J. Cálculo1. Potenciando... Primera Edición, 2019, Cengage"
+  const mA=r.match(/\b(19|20)\d{2}\b/);
+  if(!mA) return {autor:null,ano:null,titulo:null};
+  const ano=parseInt(mA[0]);
+
+  // Dividir todo lo ANTES del año en segmentos
+  const beforeYear=r.substring(0,r.indexOf(mA[0])).replace(/[\s,\.]+$/,'').trim();
+  const segs=beforeYear.split(/\.\s+/);
+
+  // Encontrar dónde terminan los autores y empieza el título
+  let autorSegs=[], titSegs=[], foundTit=false;
+  for(let i=0;i<segs.length;i++){
+    const s=segs[i].trim(); if(!s) continue;
+    if(!foundTit && esSegAutor(s)){
+      autorSegs.push(s);
+    } else {
+      if(!foundTit) foundTit=true;
+      if(RE_EDIT.test(s)||RE_EDIC.test(s)) break;
+      if(titSegs.length>1) break;
+      titSegs.push(s);
+    }
+  }
+  return {
+    autor: autorSegs.join('. ')||null,
+    ano,
+    titulo: titSegs.join('. ')||null
+  };
+}
+
+// Extrae TODOS los apellidos de una cadena de autores
+// Funciona para: "Edwards, B., Larson, R." / "Arancibia S. y Mena J." / "Lima, Elon Lages."
+function apellidosDeAutor(autorStr){
+  if(!autorStr) return [];
+  // Capturar todas las palabras capitalizadas de 3+ chars (apellidos)
+  const matches=autorStr.match(/\b([A-ZÁÉÍÓÚÜ][a-záéíóúü]{2,})\b/g)||[];
+  // Eliminar palabras que son claramente no-apellidos
+  const noApellidos=new Set(['Potenciando','Pensamiento','Critico','Traves','Primera','Segunda','Tercera','Cuarta','Quinta','Editorial','Edicion','Ediciones','Universidad','Learning','Editores']);
+  return [...new Set(matches.map(m=>norm(m)).filter(m=>m.length>2&&!noApellidos.has(m)))];
+}
+
+function topCandidatos(ref, n){
+  const {autor, titulo} = extraerApa(ref);
+  const titNorm = titulo ? norm(titulo) : '';
+  const titTokens = titNorm ? tokens(titNorm) : [];
+  const modo = document.getElementById('modoMatch').value;
+
+  let pool = dfCat;
+  let aviso = '';
+  let apellidosUsados = [];
+
+  if(modo === 'autor_titulo' && autor){
+    const apellidos = apellidosDeAutor(autor);
+    apellidosUsados = apellidos;
+
+    // Intentar cada apellido y unir los pools
+    let poolSet = new Set();
+    let encontrado = false;
+    for(const ap of apellidos){
+      if(ap.length < 3) continue;
+      const conAp = dfCat.filter(c => norm(c.autor||'').includes(ap));
+      if(conAp.length){ conAp.forEach(c => poolSet.add(c)); encontrado = true; }
+    }
+    if(encontrado){
+      pool = [...poolSet];
+    } else {
+      // Sin ningún autor → buscar solo si título tiene 2+ tokens
+      aviso = `Autores [${apellidos.join(', ')}] no encontrados — buscando por título`;
+      pool = titTokens.length >= 2 ? dfCat : [];
+    }
+  }
+
+  if(!titNorm){
+    const hint = autor ? norm(autor).split(' ').filter(t=>t.length>3).slice(0,3).join(' ') : '';
+    return { cands:[], aviso:'No se pudo extraer título (formato no estándar APA)', hint };
+  }
+
+  if(!pool.length){
+    return { cands:[], aviso, hint: titTokens.slice(0,4).join(' ') };
+  }
+
+  // Si el pool fue filtrado por autor, podemos usar max(covRef,covCat)
+  // Si buscamos en todo el catálogo sin autor, usamos media geométrica (más estricto)
+  const autorConfirmado = pool.length < dfCat.length;
+  const minScore = titTokens.length <= 1 ? 0.8 : 0.2;
+
+  const cands = pool
+    .map(c => ({c, score: cobertura(titNorm, norm(c.titulo||''), autorConfirmado)}))
+    .filter(x => x.score >= minScore)
+    .sort((a,b) => b.score-a.score)
+    .slice(0, n)
+    .map(x => ({...x.c, _score: Math.round(x.score*100)}));
+
+  const hint = titTokens.slice(0,4).join(' ');
+  return { cands, aviso, hint };
+}
+
+function urlBuscalibre(q){ return `https://www.buscalibre.cl/libros/search?q=${encodeURIComponent(q)}`; }
+function urlScholar(q){ return `https://scholar.google.com/scholar?q=${encodeURIComponent('"'+q+'"')}`; }
+function urlDialnet(q){ return `https://dialnet.unirioja.es/buscar/documentos?querysDismax.DOCUMENTAL_TODO=${encodeURIComponent(q)}`; }
+
+// ── PROCESAR ─────────────────────────────────────────
+async function procesar(){
+  const nCand=parseInt(document.getElementById('nCandidatos').value);
+  items=[];
+  document.getElementById('emptyState').style.display='none';
+  document.getElementById('reviewList').innerHTML='';
+  document.getElementById('statsBar').classList.add('show');
+  document.getElementById('filterRow').classList.add('show');
+  document.getElementById('gProgress').style.width='0%';
+
+  for(let i=0;i<dfRefs.length;i++){
+    const fila=dfRefs[i];
+    const ref=(fila.referencia||Object.values(fila)[0]||'').trim();
+    if(!ref) continue;
+    const tipo=clasificar(ref);
+    const {cands, aviso, hint}=(tipo==='Libro'||tipo==='Capítulo de libro')?topCandidatos(ref,nCand):{cands:[],aviso:'',hint:''};
+    const parsed=extraerApa(ref);
+    const apellidos=apellidosDeAutor(parsed.autor||'');
+    const debug=`Extraído → autor: "${parsed.autor||'?'}" | título: "${parsed.titulo||'?'}" | apellidos buscados: [${apellidos.join(', ')||'?'}]`;
+    items.push({
+      idx:i+1, ref, tipo, candidatos:cands, aviso, hint:hint||'', titulo:parsed.titulo,
+      estado:'pend', confirmado:null, _debug: debug,
+      tipo_biblio: 'obligatoria', // default, cambiable por el usuario
+      _presel: (cands.length && cands[0]._score >= 80) ? 0 : null
+    });
+    document.getElementById('gProgress').style.width=Math.round((i+1)/dfRefs.length*100)+'%';
+    if(i%10===0) await new Promise(r=>setTimeout(r,0));
+  }
+
+  renderAll();
+  updateStats();
+}
+
+// ── RENDER ────────────────────────────────────────────
+function scoreClass(s){ return s>=70?'high':s>=45?'med':'low'; }
+
+function renderCard(item){
+  const div=document.createElement('div');
+  div.className='ref-card'+(item.estado==='ok'?' resolved-ok':item.estado==='no'?' resolved-no':'');
+  div.id='card_'+item.idx;
+
+  // Texto de estado
+  const stMap={pend:['st-pending','● Pendiente'],ok:['st-found','✓ Confirmado'],no:['st-notfound','✗ No encontrado']};
+  const [stCls,stLbl]=stMap[item.estado];
+
+  // Header
+  let headerHTML=`
+    <div class="card-header">
+      <div class="card-num">${item.idx}</div>
+      <div class="card-ref">${item.ref}</div>
+      <div class="card-tipo"><span class="tipo-pill">${item.tipo}</span></div>
+      <div class="card-status ${stCls}">${stLbl}</div>
+    </div>`;
+
+  // Body — candidatos o acciones especiales
+  let bodyHTML='';
+  let actionsHTML='';
+
+  if(item.tipo==='Libro'||item.tipo==='Capítulo de libro'){
+    if(item.estado==='pend'){
+      // Pre-selección automática
+      const presel = item._presel;
+      if(presel !== null && !(item.idx in selectedCand)){
+        selectedCand[item.idx] = { ci: presel, fromManual: false };
+      }
+      const selActual = selectedCand[item.idx];
+
+      // Candidatos automáticos
+      let candsHTML='';
+      if(item.candidatos.length){
+        item.candidatos.forEach((c,ci)=>{
+          const esSel = selActual && !selActual.fromManual && selActual.ci===ci;
+          const preTag = (ci===0 && presel!==null) ? ' <span style="font-size:.62rem;background:var(--navy);color:white;padding:.1rem .35rem;border-radius:3px;margin-left:.3rem">auto</span>' : '';
+          candsHTML+=`<div class="candidate${esSel?' selected':''}" id="cand_${item.idx}_${ci}" onclick="selCand(${item.idx},${ci})">
+            <div class="cand-score ${scoreClass(c._score)}">${c._score}%</div>
+            <div class="cand-info">
+              <div class="cand-titulo">${c.titulo||'—'}${preTag}</div>
+              <div class="cand-meta">${c.autor||'—'} · ${c.ano||'s/f'}</div>
+            </div>
+            <div class="cand-ejemplares">${c.numero_ejemplares}<span>ej.</span></div>
+          </div>`;
+        });
+      } else {
+        const msg=item.aviso||'Sin candidatos automáticos.';
+        candsHTML=`<div class="no-cands">⚠ ${msg}</div>`;
+      }
+
+      // Debug: qué extrajo el sistema
+      const dbg=item._debug||'';
+      const dbgHTML=dbg?`<div class="debug-line">🔍 ${dbg}</div>`:'';
+
+      // Búsqueda manual en catálogo
+      const manualId=`manual_${item.idx}`;
+      const manualResId=`manualRes_${item.idx}`;
+
+      bodyHTML=`<div class="card-body">
+        <div class="candidates-title">Candidatos del catálogo — selecciona el correcto:</div>
+        ${dbgHTML}
+        <div class="candidates" id="cands_${item.idx}">${candsHTML}</div>
+
+        <div class="manual-search-wrap">
+          <div class="manual-label">🔎 Buscar manualmente en el catálogo:</div>
+          <input class="manual-input" id="${manualId}"
+            placeholder="Escribe palabras del título o autor..."
+            value="${item.hint||''}"
+            oninput="buscarManual(${item.idx},'${manualId}','${manualResId}')"/>
+          <div class="manual-results" id="${manualResId}"></div>
+        </div>
+      </div>`;
+
+      const burl=urlBuscalibre(item.titulo||item.ref.substring(0,60));
+      const confLabel = (selActual && !selActual.fromManual && item.candidatos[selActual.ci])
+        ? `✓ Confirmar: "${(item.candidatos[selActual.ci].titulo||'').substring(0,30)}..."`
+        : '✓ Confirmar seleccionado';
+      actionsHTML=`<div class="card-actions">
+        <button class="btn-confirm" onclick="confirmarSelected(${item.idx})">${confLabel}</button>
+        <button class="btn-notfound" onclick="marcarNoEncontrado(${item.idx})">✗ No está en catálogo</button>
+        <a href="${burl}" target="_blank" class="link-search">🔍 Buscalibre</a>
+      </div>`;
+    } else {
+      // Resuelta
+      const conf=item.confirmado;
+      const banner=item.estado==='ok'
+        ? `<div class="resolved-banner show ok">✓ ${conf?.titulo||'—'} · ${conf?.autor||'—'} · ${conf?.ano||''} · ${conf?.numero_ejemplares||''} ej.</div>`
+        : `<div class="resolved-banner show no">✗ No encontrado en catálogo</div>`;
+      bodyHTML=banner;
+      const ob=item.tipo_biblio==='obligatoria';
+      actionsHTML=`<div class="card-actions">
+        <button class="btn-undo" onclick="deshacer(${item.idx})">↩ Deshacer</button>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:.4rem;font-size:.75rem;color:var(--muted)">
+          Tipo:
+          <button class="tipo-btn oblig${ob?' on':''}" onclick="setTipo(${item.idx},'obligatoria')">Obligatoria</button>
+          <button class="tipo-btn compl${!ob?' on':''}" onclick="setTipo(${item.idx},'complementaria')">Complementaria</button>
+        </div>
+      </div>`;
+    }
+  } else if(item.tipo==='Artículo de revista'){
+    const titulo=item.titulo||item.ref.substring(0,80);
+    bodyHTML=`<div class="art-links">
+      <a class="art-link" href="${urlScholar(titulo)}" target="_blank">🎓 Google Scholar</a>
+      <a class="art-link" href="${urlDialnet(titulo)}" target="_blank">📖 Dialnet</a>
+    </div>`;
+    if(item.estado==='pend'){
+      actionsHTML=`<div class="card-actions">
+        <button class="btn-confirm" onclick="marcarArticulo(${item.idx})">✓ Verificado externamente</button>
+        <button class="btn-notfound" onclick="marcarNoEncontrado(${item.idx})">✗ No disponible</button>
+      </div>`;
+    } else {
+      actionsHTML=`<div class="card-actions"><button class="btn-undo" onclick="deshacer(${item.idx})">↩ Deshacer</button></div>`;
+    }
+  } else {
+    // Tesis, congreso, web, etc.
+    if(item.estado==='pend'){
+      actionsHTML=`<div class="card-actions">
+        <button class="btn-confirm" onclick="marcarOk(${item.idx})">✓ Verificado</button>
+        <button class="btn-notfound" onclick="marcarNoEncontrado(${item.idx})">✗ No disponible</button>
+      </div>`;
+    } else {
+      actionsHTML=`<div class="card-actions"><button class="btn-undo" onclick="deshacer(${item.idx})">↩ Deshacer</button></div>`;
+    }
+  }
+
+  div.innerHTML=headerHTML+bodyHTML+actionsHTML;
+  return div;
+}
+
+function renderAll(){
+  filtrar();
+}
+
+let selectedCand={}; // idx → ci
+
+function selCand(idx, ci, fromManual=false){
+  const item=items.find(x=>x.idx===idx); if(!item) return;
+  selectedCand[idx]={ ci, fromManual };
+  // Deselect todos los candidatos automáticos
+  item.candidatos.forEach((_,i)=>{
+    const el=document.getElementById(`cand_${idx}_${i}`);
+    if(el) el.classList.remove('selected');
+  });
+  // Deselect todos los manuales
+  document.querySelectorAll(`[id^="mcand_${idx}_"]`).forEach(el=>el.classList.remove('selected'));
+  // Seleccionar el clickeado
+  const elId=fromManual?`mcand_${idx}_${ci}`:`cand_${idx}_${ci}`;
+  const el=document.getElementById(elId);
+  if(el) el.classList.add('selected');
+}
+
+// Búsqueda manual en tiempo real dentro del catálogo
+function buscarManual(idx, inputId, resId){
+  const q=document.getElementById(inputId).value.trim();
+  const resDiv=document.getElementById(resId);
+  if(!resDiv) return;
+  if(q.length<2){ resDiv.innerHTML=''; return; }
+
+  const qn=norm(q);
+  const resultados=dfCat
+    .map(c=>{
+      const tn=norm(c.titulo||''), an=norm(c.autor||'');
+      // Buscar cualquier palabra del query en título o autor
+      const hit=qn.split(' ').filter(w=>w.length>1&&(tn.includes(w)||an.includes(w))).length;
+      return {c, hit};
+    })
+    .filter(x=>x.hit>0)
+    .sort((a,b)=>b.hit-a.hit)
+    .slice(0,6);
+
+  if(!resultados.length){ resDiv.innerHTML=`<div class="no-cands" style="margin-top:.3rem">Sin resultados en catálogo para "${q}"</div>`; return; }
+
+  resDiv.innerHTML=resultados.map((r,mi)=>`
+    <div class="candidate" id="mcand_${idx}_${mi}" onclick="selCandManual(${idx},${mi},${JSON.stringify(r.c).replace(/"/g,'&quot;')})">
+      <div class="cand-score med" style="background:var(--navy)">cat</div>
+      <div class="cand-info">
+        <div class="cand-titulo">${r.c.titulo||'—'}</div>
+        <div class="cand-meta">${r.c.autor||'—'} · ${r.c.ano||'s/f'}</div>
+      </div>
+      <div class="cand-ejemplares">${r.c.numero_ejemplares}<span>ej.</span></div>
+    </div>`).join('');
+}
+
+// Mapa temporal de candidatos manuales
+const manualCandData={};
+
+function selCandManual(idx, mi, data){
+  manualCandData[`${idx}_${mi}`]=data;
+  selCand(idx, mi, true);
+}
+
+function confirmarSelected(idx){
+  const item=items.find(x=>x.idx===idx); if(!item) return;
+  const sel=selectedCand[idx];
+  if(sel===undefined){ alert('Selecciona un candidato primero.'); return; }
+  if(sel.fromManual){
+    item.confirmado=manualCandData[`${idx}_${sel.ci}`];
+  } else {
+    item.confirmado=item.candidatos[sel.ci];
+  }
+  item.estado='ok';
+  reRenderCard(item);
+  updateStats();
+}
+function marcarNoEncontrado(idx){ const item=items.find(x=>x.idx===idx); if(!item) return; item.estado='no'; item.confirmado=null; reRenderCard(item); updateStats(); }
+function marcarArticulo(idx){ const item=items.find(x=>x.idx===idx); if(!item) return; item.estado='ok'; item.confirmado={titulo:'Verificado externamente',autor:'',ano:'',numero_ejemplares:''}; reRenderCard(item); updateStats(); }
+function marcarOk(idx){ const item=items.find(x=>x.idx===idx); if(!item) return; item.estado='ok'; item.confirmado={titulo:'Verificado',autor:'',ano:'',numero_ejemplares:''}; reRenderCard(item); updateStats(); }
+function deshacer(idx){ const item=items.find(x=>x.idx===idx); if(!item) return; item.estado='pend'; item.confirmado=null; delete selectedCand[idx]; reRenderCard(item); updateStats(); }
+
+function reRenderCard(item){
+  const existing=document.getElementById('card_'+item.idx);
+  if(!existing) return;
+  const nuevo=renderCard(item);
+  existing.replaceWith(nuevo);
+  // Si tiene hint y no tiene candidatos automáticos, disparar búsqueda manual
+  if(item.estado==='pend' && !item.candidatos.length && item.hint){
+    const manualId=`manual_${item.idx}`;
+    const manualResId=`manualRes_${item.idx}`;
+    setTimeout(()=>buscarManual(item.idx, manualId, manualResId), 50);
+  }
+}
+
+// ── STATS ─────────────────────────────────────────────
+function updateStats(){
+  const total=items.length;
+  const ok=items.filter(x=>x.estado==='ok').length;
+  const no=items.filter(x=>x.estado==='no').length;
+  const pend=total-ok-no;
+  document.getElementById('sTotal').textContent=total;
+  document.getElementById('sOk').textContent=ok;
+  document.getElementById('sNo').textContent=no;
+  document.getElementById('sPend').textContent=pend;
+  document.getElementById('gProgress').style.width=total?Math.round((ok+no)/total*100)+'%':'0%';
+  document.getElementById('btnExport').disabled=(ok+no)===0;
+}
+
+// ── FILTROS ───────────────────────────────────────────
+function setChip(c){
+  chipActivo=c;
+  ['cTodos','cPend','cOk','cNo'].forEach(id=>document.getElementById(id).classList.remove('on'));
+  const map={todos:'cTodos',pend:'cPend',ok:'cOk',no:'cNo'};
+  document.getElementById(map[c]).classList.add('on');
+  filtrar();
+}
+function filtrar(){
+  const txt=document.getElementById('fText').value.toLowerCase();
+  const list=document.getElementById('reviewList');
+  list.innerHTML='';
+  const visible=items.filter(item=>{
+    if(txt&&!item.ref.toLowerCase().includes(txt)) return false;
+    if(chipActivo==='pend'&&item.estado!=='pend') return false;
+    if(chipActivo==='ok'&&item.estado!=='ok') return false;
+    if(chipActivo==='no'&&item.estado!=='no') return false;
+    return true;
+  });
+  visible.forEach(item=>{
+    const card=renderCard(item);
+    list.appendChild(card);
+    // Si sin candidatos y tiene hint → disparar búsqueda automática
+    if(item.estado==='pend' && !item.candidatos.length && item.hint){
+      const manualId=`manual_${item.idx}`;
+      const manualResId=`manualRes_${item.idx}`;
+      setTimeout(()=>buscarManual(item.idx, manualId, manualResId), 50);
+    }
+  });
+  if(!visible.length){
+    list.innerHTML='<div style="text-align:center;padding:2rem;color:var(--muted);font-size:.83rem">Sin resultados para el filtro actual.</div>';
+  }
+}
+
+function setTipo(idx, tipo){
+  const item=items.find(x=>x.idx===idx); if(!item) return;
+  item.tipo_biblio=tipo;
+  reRenderCard(item);
+}
+
+// ── EXPORTAR PLANILLA ────────────────────────────────
+function exportar(){
+  const carrera = document.getElementById('inCarrera').value.trim();
+  const clave   = document.getElementById('inClave').value.trim();
+  const asig    = document.getElementById('inAsignatura').value.trim();
+
+  // ── Construir array de arrays (estructura de la planilla) ──
+  const aoa = [
+    // Fila 1: Carrera
+    ['Carrera o Programa: ' + carrera, null,null,null,null,null,null,null,null,null,null,null],
+    // Fila 2: Encabezados principales
+    ['Clave Asignatura','Nombre Asignatura','Tipo Bibliografía','Referencias',
+     'Disponibilidad en Bibliotecas ',null,null,null,null,
+     'Observaciones','Proveedor ','Valor pesos'],
+    // Fila 3: Sub-encabezado disponibilidad
+    [null,null,null,null,
+     'LIBROS Nº de ejemplares ( cantidad -año)',null,null,null,
+     'Artículo Científico Disponible en ( papel - on line) ',
+     null,null,null],
+    // Fila 4: Sub-sub-encabezado
+    [null,null,null,null,
+     'Btca UA','Otras Btcas ','Total ','Disponible on line URL',
+     null,null,null,null],
+  ];
+
+  // Separar por tipo_biblio para agrupar obligatoria → complementaria
+  const grupos = ['obligatoria','complementaria'];
+  grupos.forEach(grupo => {
+    const del_grupo = items.filter(x => x.tipo_biblio === grupo);
+    if(!del_grupo.length) return;
+    del_grupo.forEach(item => {
+      const conf = item.confirmado;
+      const esArticulo = item.tipo === 'Artículo de revista';
+      const encontrado = item.estado === 'ok';
+      const ejemplares = (encontrado && !esArticulo && conf?.numero_ejemplares)
+        ? String(conf.numero_ejemplares) + (conf.ano ? ' - ' + conf.ano : '')
+        : '';
+      const artDisp = (encontrado && esArticulo) ? 'on line' : '';
+      const obs = item.estado === 'no'   ? 'No encontrado en catálogo'
+                : item.estado === 'pend' ? 'Pendiente de verificación'
+                : encontrado && conf     ? 'Verificado'
+                : '';
+      aoa.push([
+        clave,          // A Clave Asignatura
+        asig,           // B Nombre Asignatura
+        grupo,          // C Tipo Bibliografía
+        item.ref,       // D Referencias
+        encontrado && !esArticulo ? (conf?.numero_ejemplares||'') : '',  // E Btca UA
+        '',             // F Otras Btcas
+        encontrado && !esArticulo ? (conf?.numero_ejemplares||'') : '',  // G Total
+        '',             // H Disponible on line URL
+        artDisp,        // I Artículo Científico
+        obs,            // J Observaciones
+        item.estado==='no' ? 'Buscalibre' : '',  // K Proveedor
+        '',             // L Valor pesos
+      ]);
+    });
+  });
+
+  // ── Crear hoja ──
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Celdas combinadas (igual que el ejemplo)
+  ws['!merges'] = [
+    {s:{r:0,c:0}, e:{r:0,c:11}},  // Fila 1: Carrera completa
+    // Fila 2-4: columnas A,B,C,D,J,K,L (sin sub-encabezado)
+    {s:{r:1,c:0}, e:{r:3,c:0}},
+    {s:{r:1,c:1}, e:{r:3,c:1}},
+    {s:{r:1,c:2}, e:{r:3,c:2}},
+    {s:{r:1,c:3}, e:{r:3,c:3}},
+    {s:{r:1,c:9}, e:{r:3,c:9}},
+    {s:{r:1,c:10},e:{r:3,c:10}},
+    {s:{r:1,c:11},e:{r:3,c:11}},
+    // Fila 2: Disponibilidad (E-I)
+    {s:{r:1,c:4}, e:{r:1,c:8}},
+    // Fila 3: LIBROS (E-H)
+    {s:{r:2,c:4}, e:{r:2,c:7}},
+    // Fila 3-4: Artículo (I)
+    {s:{r:2,c:8}, e:{r:3,c:8}},
+  ];
+
+  // Anchos de columna
+  ws['!cols'] = [14,22,16,72,10,10,8,32,22,28,14,12].map(w=>({wch:w}));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Respaldo biblioteca');
+  XLSX.writeFile(wb, 'planilla_bibliografia_apa7.xlsx');
+}
+</script>
+</body>
+</html>
