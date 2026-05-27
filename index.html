@@ -367,11 +367,11 @@ header {
   <div class="setup-panel" id="setupPanel">
     <div class="setup-title">Cargar archivos</div>
     <div class="upload-row">
-      <div class="upload-zone" id="zoneRefs">
-        <input type="file" accept=".csv" onchange="onFileRefs(event).catch(console.error)"/>
-        <div class="upload-lbl">📄 Referencias</div>
-        <div class="upload-desc">CSV con columna <code>referencia</code></div>
-        <div class="upload-st" id="stRefs"></div>
+      <div class="upload-zone" id="zonePlanilla">
+        <input type="file" accept=".xlsx,.xls,.csv" onchange="onFilePlanilla(event).catch(console.error)"/>
+        <div class="upload-lbl">📋 Planilla de bibliografía</div>
+        <div class="upload-desc">Excel con columnas A=Clave, B=Asignatura, C=Tipo, D=Referencias</div>
+        <div class="upload-st" id="stPlanilla"></div>
       </div>
       <div class="upload-zone" id="zoneCat">
         <input type="file" accept=".csv" onchange="onFileCat(event).catch(console.error)"/>
@@ -397,20 +397,8 @@ header {
       </div>
       <button class="btn-run" id="btnRun" disabled onclick="procesar()">▶ Iniciar revisión</button>
     </div>
-    <div class="planilla-fields">
-      <div class="pf-group">
-        <div class="pf-label">Clave asignatura</div>
-        <input class="pf-input" id="inClave" placeholder="Ej: MAT101"/>
-      </div>
-      <div class="pf-group">
-        <div class="pf-label">Nombre asignatura</div>
-        <input class="pf-input" id="inAsignatura" placeholder="Ej: Cálculo I"/>
-      </div>
-      <div class="pf-group">
-        <div class="pf-label">Carrera o programa</div>
-        <input class="pf-input" id="inCarrera" placeholder="Ej: Ingeniería Civil"/>
-      </div>
-    </div>
+    <!-- Info de la planilla cargada -->
+    <div id="planillaInfo" style="display:none;margin-top:.75rem;padding:.6rem .9rem;background:var(--blue-bg);border:1px solid #c5d3e8;border-radius:6px;font-size:.78rem;color:var(--blue)"></div>
   </div>
 
   <!-- STATS BAR -->
@@ -440,7 +428,7 @@ header {
   <div class="empty" id="emptyState">
     <div class="empty-icon">📖</div>
     <div class="empty-t">Carga los archivos para comenzar</div>
-    <div class="empty-s">Sube el CSV de referencias y el catálogo KOHA,<br/>luego presiona <strong>Iniciar revisión</strong>.</div>
+    <div class="empty-s">Sube la planilla Excel de bibliografía y el catálogo KOHA,<br/>luego presiona <strong>Iniciar revisión</strong>.</div>
   </div>
 
 </div>
@@ -448,6 +436,9 @@ header {
 <script>
 // ── STATE ─────────────────────────────────────────────
 let dfRefs = [], dfCat = [], items = [], chipActivo = 'todos';
+let planillaRefs  = [];   // [{ref, clave, nombre, tipo_biblio}]
+let planillaCarrera = '';
+let planillaOrigAoa = []; // encabezados originales para reconstruir export
 
 // ── ENCODING / CSV ────────────────────────────────────
 const COL_MAP = {
@@ -478,14 +469,47 @@ async function parseCSV(file){
   return new Promise(res=>Papa.parse(txt,{header:true,skipEmptyLines:true,complete:r=>res({rows:r.data.map(resolverRow),enc})}));
 }
 
-async function onFileRefs(e){
+async function onFilePlanilla(e){
   const f=e.target.files[0]; if(!f) return;
-  document.getElementById('stRefs').textContent='⏳ Leyendo...';
-  const {rows,enc}=await parseCSV(f);
-  dfRefs=rows;
-  const ok=rows[0]&&rows[0].referencia!==undefined;
-  document.getElementById('stRefs').textContent=`✓ ${rows.length} filas · ${enc}${ok?'':' ⚠ sin col referencia'}`;
-  document.getElementById('zoneRefs').classList.add('ok');
+  document.getElementById('stPlanilla').textContent='⏳ Leyendo...';
+  const ext=f.name.split('.').pop().toLowerCase();
+
+  if(ext==='csv'){
+    const {rows,enc}=await parseCSV(f);
+    dfRefs=rows;
+    planillaRefs=rows.map(r=>({ref:r.referencia||Object.values(r)[0]||'',clave:'',nombre:'',tipo_biblio:'obligatoria'}));
+    document.getElementById('stPlanilla').textContent=`✓ ${rows.length} referencias · CSV · ${enc}`;
+    document.getElementById('zonePlanilla').classList.add('ok');
+    checkReady(); return;
+  }
+
+  // XLSX / XLS
+  const buf=await f.arrayBuffer();
+  const wb=XLSX.read(buf,{type:'array'});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:null,raw:false});
+
+  planillaOrigAoa=aoa.slice(0,4);
+  planillaCarrera=String(aoa[0]?.[0]||'').replace(/carrera\s*o\s*programa\s*:\s*/i,'').trim();
+
+  planillaRefs=[];
+  let clave='',nombre='',tipo_biblio='básica';
+  for(let i=4;i<aoa.length;i++){
+    const row=aoa[i]||[];
+    const ref=(row[3]||'').toString().trim();
+    if(!ref||ref==='null') continue;
+    if(row[0]&&String(row[0]).trim()) clave=String(row[0]).trim();
+    if(row[1]&&String(row[1]).trim()) nombre=String(row[1]).trim();
+    if(row[2]&&String(row[2]).trim()) tipo_biblio=String(row[2]).trim();
+    planillaRefs.push({ref,clave,nombre,tipo_biblio});
+  }
+
+  dfRefs=planillaRefs.map(r=>({referencia:r.ref}));
+  const asigs=[...new Set(planillaRefs.map(r=>r.clave))];
+  document.getElementById('stPlanilla').textContent=`✓ ${planillaRefs.length} refs · ${asigs.length} asignaturas`;
+  document.getElementById('planillaInfo').style.display='block';
+  document.getElementById('planillaInfo').innerHTML=`📋 <strong>${planillaCarrera}</strong> · ${asigs.length} asignaturas: ${asigs.join(', ')}`;
+  document.getElementById('zonePlanilla').classList.add('ok');
   checkReady();
 }
 async function onFileCat(e){
@@ -504,9 +528,11 @@ function checkReady(){ document.getElementById('btnRun').disabled=!(dfRefs.lengt
 const STOP=new Set(['de','del','la','el','los','las','un','una','y','en','a','para','por','al','con','su','sus','lo','se','que','the','of','and','in','an']);
 function norm(t){
   if(!t) return '';
-  return t.toLowerCase()
+  return t
+    .replace(/[\u201C\u201D\u201E\u201F\u00AB\u00BB\u2018\u2019"']/g,' ') // comillas tipográficas
+    .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/([a-z])(\d)/g,'$1 $2').replace(/(\d)([a-z])/g,'$1 $2') // "calculo1"→"calculo 1"
+    .replace(/([a-z])(\d)/g,'$1 $2').replace(/(\d)([a-z])/g,'$1 $2')
     .replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
 }
 function tokens(s){ return s.split(' ').filter(t=>t.length>1&&!STOP.has(t)); }
@@ -548,12 +574,30 @@ const RE_EDIC=/^(primera|segunda|tercera|cuarta|quinta|sexta|s[eé]ptima|octava|
 // ¿Un segmento parece ser parte del nombre de autor?
 function esSegAutor(s){
   const w=s.trim().split(/\s+/);
-  if(w.length>5) return false;
-  // Tiene una inicial sola (A. o A)
+  if(w.length>6) return false;
+  // Inicial simple: "S." o "S"
   if(w.some(t=>/^[A-ZÁÉÍÓÚÜ]\.?$/.test(t))) return true;
-  // Empieza con conector "y/and/&"
+  // Iniciales compuestas sin espacio: "S.D." "J.R." "A.B.C." "S.D" 
+  if(w.some(t=>/^([A-ZÁÉÍÓÚÜ]\.){1,4}[A-ZÁÉÍÓÚÜ]?\.?$/.test(t))) return true;
+  // Empieza con conector "y / and / &"
   if(/^(y|and|&)\s+/i.test(s.trim())) return true;
   return false;
+}
+
+// Limpia comillas y sufijos de editorial que quedan pegados al título extraído
+// Ej: '"Análisis Numérico Elemental", Ed. Mc' → 'Análisis Numérico Elemental'
+function limpiarTitulo(tit){
+  if(!tit) return tit;
+  // Normalizar comillas tipográficas a rectas
+  tit = tit.replace(/[\u201C\u201D\u201E\u201F\u00AB\u00BB]/g,'"')
+            .replace(/[\u2018\u2019]/g,"'");
+  // Quitar comillas iniciales
+  tit = tit.replace(/^["']+/, '');
+  // Quitar desde la primera comilla de cierre (con lo que sigue: ", Ed. / ", Vol. / etc.)
+  tit = tit.replace(/["']\s*,?.*$/, '');
+  // Quitar sufijos tipo ", Ed." / ", Editorial" / ": Ed. Mc. Graw"
+  tit = tit.replace(/[,;:]\s*(ed\.|editorial|editores?|vol\.|tomo|publishers?|press)\s*.*$/i, '');
+  return tit.trim();
 }
 
 // Extraer título desde el texto que viene después del año
@@ -568,7 +612,7 @@ function titDesdeTexto(after){
     if(i>2) break;
     tit+='. '+s;
   }
-  return tit.trim();
+  return limpiarTitulo(tit.trim());
 }
 
 function extraerApa(ref){
@@ -611,7 +655,7 @@ function extraerApa(ref){
   return {
     autor: autorSegs.join('. ')||null,
     ano,
-    titulo: titSegs.join('. ')||null
+    titulo: limpiarTitulo(titSegs.join('. '))||null
   };
 }
 
@@ -705,10 +749,13 @@ async function procesar(){
     const parsed=extraerApa(ref);
     const apellidos=apellidosDeAutor(parsed.autor||'');
     const debug=`Extraído → autor: "${parsed.autor||'?'}" | título: "${parsed.titulo||'?'}" | apellidos buscados: [${apellidos.join(', ')||'?'}]`;
+    const pr = planillaRefs[i] || {};
     items.push({
       idx:i+1, ref, tipo, candidatos:cands, aviso, hint:hint||'', titulo:parsed.titulo,
       estado:'pend', confirmado:null, _debug: debug,
-      tipo_biblio: 'obligatoria', // default, cambiable por el usuario
+      tipo_biblio: pr.tipo_biblio || 'básica',
+      clave: pr.clave || '',
+      nombre: pr.nombre || '',
       _presel: (cands.length && cands[0]._score >= 80) ? 0 : null
     });
     document.getElementById('gProgress').style.width=Math.round((i+1)/dfRefs.length*100)+'%';
@@ -993,99 +1040,90 @@ function filtrar(){
   }
 }
 
-function setTipo(idx, tipo){
-  const item=items.find(x=>x.idx===idx); if(!item) return;
-  item.tipo_biblio=tipo;
-  reRenderCard(item);
-}
-
-// ── EXPORTAR PLANILLA ────────────────────────────────
 function exportar(){
-  const carrera = document.getElementById('inCarrera').value.trim();
-  const clave   = document.getElementById('inClave').value.trim();
-  const asig    = document.getElementById('inAsignatura').value.trim();
-
-  // ── Construir array de arrays (estructura de la planilla) ──
-  const aoa = [
-    // Fila 1: Carrera
-    ['Carrera o Programa: ' + carrera, null,null,null,null,null,null,null,null,null,null,null],
-    // Fila 2: Encabezados principales
-    ['Clave Asignatura','Nombre Asignatura','Tipo Bibliografía','Referencias',
-     'Disponibilidad en Bibliotecas ',null,null,null,null,
-     'Observaciones','Proveedor ','Valor pesos'],
-    // Fila 3: Sub-encabezado disponibilidad
-    [null,null,null,null,
-     'LIBROS Nº de ejemplares ( cantidad -año)',null,null,null,
-     'Artículo Científico Disponible en ( papel - on line) ',
-     null,null,null],
-    // Fila 4: Sub-sub-encabezado
-    [null,null,null,null,
-     'Btca UA','Otras Btcas ','Total ','Disponible on line URL',
-     null,null,null,null],
+  // ── Reconstruir encabezados desde la planilla original ──
+  const hdrs = planillaOrigAoa.length >= 4 ? planillaOrigAoa : [
+    ['Carrera o Programa: ' + planillaCarrera,...Array(11).fill(null)],
+    ['Clave Asignatura','Nombre Asignatura','Tipo Bibliografía','Referencias','Disponibilidad en Bibliotecas',...Array(4).fill(null),'Observaciones','Proveedor','Valor pesos'],
+    [null,null,null,null,'LIBROS N° de ejemplares (cantidad - año)',...Array(3).fill(null),'Artículo Científico Disponible en (papel - on line)',...Array(3).fill(null)],
+    [null,null,null,null,'Btca UA','Otras Btcas','Total','Disponible on line URL',null,null,null,null],
   ];
+  // Asegurar 12 columnas en encabezados
+  const aoa = hdrs.map(r => { const row=[...r]; while(row.length<12) row.push(null); return row.slice(0,12); });
 
-  // Separar por tipo_biblio para agrupar obligatoria → complementaria
-  const grupos = ['obligatoria','complementaria'];
+  // ── Agrupar items por asignatura preservando orden original ──
+  // Orden: agrupar por (clave+nombre) → dentro de cada asignatura: básica/obligatoria primero, complementaria después
+  const grupos = [];
+  const visto = new Map();
+  items.forEach(item => {
+    const key = item.clave + '||' + item.nombre;
+    if(!visto.has(key)){
+      visto.set(key, {clave:item.clave, nombre:item.nombre, basica:[], complementaria:[]});
+      grupos.push(visto.get(key));
+    }
+    const tb = item.tipo_biblio.toLowerCase();
+    const esCompl = tb.includes('compl');
+    visto.get(key)[esCompl ? 'complementaria' : 'basica'].push(item);
+  });
+
+  // ── Generar filas de datos ──
   grupos.forEach(grupo => {
-    const del_grupo = items.filter(x => x.tipo_biblio === grupo);
-    if(!del_grupo.length) return;
-    del_grupo.forEach(item => {
-      const conf = item.confirmado;
-      const esArticulo = item.tipo === 'Artículo de revista';
-      const encontrado = item.estado === 'ok';
-      const ejemplares = (encontrado && !esArticulo && conf?.numero_ejemplares)
-        ? String(conf.numero_ejemplares) + (conf.ano ? ' - ' + conf.ano : '')
-        : '';
-      const artDisp = (encontrado && esArticulo) ? 'on line' : '';
-      const obs = item.estado === 'no'   ? 'No encontrado en catálogo'
-                : item.estado === 'pend' ? 'Pendiente de verificación'
-                : encontrado && conf     ? 'Verificado'
-                : '';
-      aoa.push([
-        clave,          // A Clave Asignatura
-        asig,           // B Nombre Asignatura
-        grupo,          // C Tipo Bibliografía
-        item.ref,       // D Referencias
-        encontrado && !esArticulo ? (conf?.numero_ejemplares||'') : '',  // E Btca UA
-        '',             // F Otras Btcas
-        encontrado && !esArticulo ? (conf?.numero_ejemplares||'') : '',  // G Total
-        '',             // H Disponible on line URL
-        artDisp,        // I Artículo Científico
-        obs,            // J Observaciones
-        item.estado==='no' ? 'Buscalibre' : '',  // K Proveedor
-        '',             // L Valor pesos
-      ]);
+    let primeraAsig = true;
+    ['basica','complementaria'].forEach(tp => {
+      const lista = grupo[tp]; if(!lista.length) return;
+      const tipoLabel = tp === 'basica' ? 'básica' : 'complementaria';
+      let primeraTipo = true;
+      lista.forEach(item => {
+        const conf = item.confirmado;
+        const esArt = item.tipo === 'Artículo de revista';
+        const enc   = item.estado === 'ok';
+        const ejems = enc && !esArt && conf?.numero_ejemplares
+          ? String(conf.numero_ejemplares) + (conf.ano ? ' - ' + conf.ano : '') : '';
+        const artD  = enc && esArt ? 'on line' : '';
+        const obs   = item.estado === 'no'   ? 'No encontrado en catálogo'
+                    : item.estado === 'pend' ? 'Pendiente'
+                    : enc && conf?.titulo     ? 'Verificado'
+                    : '';
+
+        aoa.push([
+          primeraAsig && primeraTipo ? grupo.clave   : null,  // A
+          primeraAsig && primeraTipo ? grupo.nombre  : null,  // B
+          primeraTipo                ? tipoLabel     : null,  // C
+          item.ref,                                           // D
+          enc && !esArt ? (conf?.numero_ejemplares||'') : '', // E Btca UA
+          '',                                                 // F Otras Btcas
+          enc && !esArt ? (conf?.numero_ejemplares||'') : '', // G Total
+          '',                                                 // H URL online
+          artD,                                              // I Artículo
+          obs,                                               // J Observaciones
+          item.estado === 'no' ? 'Buscalibre' : '',          // K Proveedor
+          '',                                                // L Valor pesos
+        ]);
+        primeraTipo = false;
+        primeraAsig = false;
+      });
     });
   });
 
   // ── Crear hoja ──
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-
-  // Celdas combinadas (igual que el ejemplo)
   ws['!merges'] = [
-    {s:{r:0,c:0}, e:{r:0,c:11}},  // Fila 1: Carrera completa
-    // Fila 2-4: columnas A,B,C,D,J,K,L (sin sub-encabezado)
-    {s:{r:1,c:0}, e:{r:3,c:0}},
-    {s:{r:1,c:1}, e:{r:3,c:1}},
-    {s:{r:1,c:2}, e:{r:3,c:2}},
-    {s:{r:1,c:3}, e:{r:3,c:3}},
-    {s:{r:1,c:9}, e:{r:3,c:9}},
-    {s:{r:1,c:10},e:{r:3,c:10}},
-    {s:{r:1,c:11},e:{r:3,c:11}},
-    // Fila 2: Disponibilidad (E-I)
-    {s:{r:1,c:4}, e:{r:1,c:8}},
-    // Fila 3: LIBROS (E-H)
-    {s:{r:2,c:4}, e:{r:2,c:7}},
-    // Fila 3-4: Artículo (I)
-    {s:{r:2,c:8}, e:{r:3,c:8}},
+    {s:{r:0,c:0},e:{r:0,c:11}},
+    {s:{r:1,c:0},e:{r:3,c:0}},{s:{r:1,c:1},e:{r:3,c:1}},
+    {s:{r:1,c:2},e:{r:3,c:2}},{s:{r:1,c:3},e:{r:3,c:3}},
+    {s:{r:1,c:9},e:{r:3,c:9}},{s:{r:1,c:10},e:{r:3,c:10}},{s:{r:1,c:11},e:{r:3,c:11}},
+    {s:{r:1,c:4},e:{r:1,c:8}},
+    {s:{r:2,c:4},e:{r:2,c:7}},
+    {s:{r:2,c:8},e:{r:3,c:8}},
   ];
+  ws['!cols']=[14,24,16,72,10,10,8,30,22,28,14,12].map(w=>({wch:w}));
 
-  // Anchos de columna
-  ws['!cols'] = [14,22,16,72,10,10,8,32,22,28,14,12].map(w=>({wch:w}));
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Respaldo biblioteca');
-  XLSX.writeFile(wb, 'planilla_bibliografia_apa7.xlsx');
+  const wbOut = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wbOut, ws, 'Respaldo biblioteca');
+  const fname = planillaCarrera
+    ? `planilla_${planillaCarrera.replace(/\s+/g,'_').substring(0,30)}.xlsx`
+    : 'planilla_bibliografia_apa7.xlsx';
+  XLSX.writeFile(wbOut, fname);
 }
 </script>
 </body>
