@@ -329,6 +329,16 @@ header {
 .tipo-btn.oblig.on  { background:#e8f4ed;border-color:var(--green);color:var(--green); }
 .tipo-btn.compl.on  { background:#eef2f9;border-color:var(--blue);color:var(--blue); }
 
+/* btca removable tags */
+.btca-tag {
+  display:inline-flex;align-items:center;gap:.3rem;
+  padding:.25rem .55rem;border-radius:4px;font-size:.72rem;font-weight:600;
+  background:var(--blue-bg);border:1px solid #c5d3e8;color:var(--blue);
+}
+.btca-tag.excluded { background:#f5efef;border-color:#d0b8b8;color:#7a4444;text-decoration:line-through; }
+.btca-tag button { background:none;border:none;cursor:pointer;padding:0;font-size:.85rem;color:inherit;opacity:.6;line-height:1; }
+.btca-tag button:hover { opacity:1; }
+
 /* planilla fields */
 .planilla-fields {
   display:grid;grid-template-columns:1fr 1fr 2fr;gap:.5rem;
@@ -366,7 +376,7 @@ header {
   <!-- SETUP -->
   <div class="setup-panel" id="setupPanel">
     <div class="setup-title">Cargar archivos</div>
-    <div class="upload-row">
+    <div class="upload-row" style="grid-template-columns:1fr 1fr 1fr">
       <div class="upload-zone" id="zonePlanilla">
         <input type="file" accept=".xlsx,.xls,.csv" onchange="onFilePlanilla(event).catch(console.error)"/>
         <div class="upload-lbl">📋 Planilla de bibliografía</div>
@@ -374,10 +384,19 @@ header {
         <div class="upload-st" id="stPlanilla"></div>
       </div>
       <div class="upload-zone" id="zoneCat">
-        <input type="file" accept=".csv" onchange="onFileCat(event).catch(console.error)"/>
-        <div class="upload-lbl">📚 Catálogo KOHA</div>
-        <div class="upload-desc">CSV con <code>titulo, autor, ano, numero_ejemplares</code></div>
+        <input type="file" accept=".csv,.xlsx,.xls" onchange="onFileCat(event).catch(console.error)"/>
+        <div class="upload-lbl">📚 Catálogo Btca UA</div>
+        <div class="upload-desc">CSV o Excel con columnas <code>titulo, autor, ano, ejemplares</code></div>
         <div class="upload-st" id="stCat"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.4rem">
+        <div class="upload-zone" id="zoneOtras">
+          <input type="file" accept=".xlsx,.xls" onchange="onFileOtras(event).catch(console.error)"/>
+          <div class="upload-lbl">🏛 Otras bibliotecas <span style="font-weight:400;font-size:.7rem">(opcional)</span></div>
+          <div class="upload-desc">Excel con una hoja por biblioteca: <code>BIBING, BIBMAT…</code></div>
+          <div class="upload-st" id="stOtras"></div>
+        </div>
+        <div id="btcaTags" style="display:none;flex-wrap:wrap;gap:.35rem;padding:.1rem .1rem"></div>
       </div>
     </div>
     <div class="config-strip">
@@ -435,10 +454,11 @@ header {
 
 <script>
 // ── STATE ─────────────────────────────────────────────
-let dfRefs = [], dfCat = [], items = [], chipActivo = 'todos';
-let planillaRefs  = [];   // [{ref, clave, nombre, tipo_biblio}]
+let dfRefs = [], dfCat = [], dfCatOtras = [], items = [], chipActivo = 'todos';
+// dfCatOtras = [{nombre: 'Btca Campus X', rows: [...]}]
+let planillaRefs  = [];
 let planillaCarrera = '';
-let planillaOrigAoa = []; // encabezados originales para reconstruir export
+let planillaOrigAoa = [];
 
 // ── ENCODING / CSV ────────────────────────────────────
 const COL_MAP = {
@@ -515,12 +535,76 @@ async function onFilePlanilla(e){
 async function onFileCat(e){
   const f=e.target.files[0]; if(!f) return;
   document.getElementById('stCat').textContent='⏳ Leyendo...';
-  const {rows,enc}=await parseCSV(f);
-  dfCat=rows.map(r=>({...r,ano:parseInt(r.ano)||0,numero_ejemplares:parseInt(r.numero_ejemplares)||1}));
-  const cols=['titulo','autor','ano','numero_ejemplares'].filter(c=>dfCat[0]&&dfCat[0][c]!==undefined);
-  document.getElementById('stCat').textContent=`✓ ${dfCat.length} registros · ${enc} · ${cols.join(', ')}`;
+  const ext=f.name.split('.').pop().toLowerCase();
+
+  if(ext==='xlsx'||ext==='xls'){
+    const buf=await f.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    dfCat=parsearHojaXlsx(ws).map(r=>({...r,ano:parseInt(r.ano)||0,numero_ejemplares:parseInt(r.numero_ejemplares)||1}));
+    document.getElementById('stCat').textContent=`✓ ${dfCat.length} registros · xlsx`;
+  } else {
+    const {rows,enc}=await parseCSV(f);
+    dfCat=rows.map(r=>({...r,ano:parseInt(r.ano)||0,numero_ejemplares:parseInt(r.numero_ejemplares)||1}));
+    document.getElementById('stCat').textContent=`✓ ${dfCat.length} registros · ${enc}`;
+  }
   document.getElementById('zoneCat').classList.add('ok');
   checkReady();
+}
+
+// Todas las hojas cargadas (nombre → rows), para poder re-incluir/excluir sin re-subir
+let btcasAll = [];
+
+async function onFileOtras(e){
+  const f=e.target.files[0]; if(!f) return;
+  document.getElementById('stOtras').textContent='⏳ Leyendo...';
+  const buf=await f.arrayBuffer();
+  const wb=XLSX.read(buf,{type:'array'});
+  btcasAll=[];
+  for(const nombre of wb.SheetNames){
+    const rows=parsearHojaXlsx(wb.Sheets[nombre])
+      .map(r=>({...r,ano:parseInt(r.ano)||0,numero_ejemplares:parseInt(r.numero_ejemplares)||1}));
+    if(rows.length) btcasAll.push({nombre, rows, excluida:false});
+  }
+  aplicarBtcas();
+  document.getElementById('zoneOtras').classList.add('ok');
+}
+
+function aplicarBtcas(){
+  dfCatOtras = btcasAll.filter(b=>!b.excluida).map(b=>({nombre:b.nombre,rows:b.rows}));
+  const activas = dfCatOtras.length;
+  const total   = btcasAll.length;
+  document.getElementById('stOtras').textContent =
+    `✓ ${activas} de ${total} bibliotecas activas`;
+  // Renderizar etiquetas
+  const wrap = document.getElementById('btcaTags');
+  wrap.style.display = 'flex';
+  wrap.innerHTML = btcasAll.map(b=>`
+    <span class="btca-tag${b.excluida?' excluded':''}">
+      ${b.nombre} (${b.rows.length})
+      <button onclick="toggleBtca('${b.nombre}')" title="${b.excluida?'Incluir':'Excluir'}">
+        ${b.excluida?'＋':'✕'}
+      </button>
+    </span>`).join('');
+}
+
+function toggleBtca(nombre){
+  const btca = btcasAll.find(b=>b.nombre===nombre);
+  if(btca) { btca.excluida = !btca.excluida; aplicarBtcas(); }
+}
+
+// Parsear una hoja xlsx → array de objetos normalizados
+function parsearHojaXlsx(ws){
+  const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:null,raw:false});
+  if(!aoa.length) return [];
+  const header=aoa[0].map(c=>normCol(String(c||'')));
+  return aoa.slice(1)
+    .map(row=>{
+      const obj={};
+      header.forEach((h,i)=>{ if(h) obj[h]=(row[i]||'').toString().trim(); });
+      return resolverRow(obj);
+    })
+    .filter(r=>r.titulo&&r.titulo.length>1);
 }
 function checkReady(){ document.getElementById('btnRun').disabled=!(dfRefs.length&&dfCat.length); }
 
@@ -726,9 +810,56 @@ function topCandidatos(ref, n){
   return { cands, aviso, hint };
 }
 
+// Búsqueda automática en catálogos de otras bibliotecas
+// Devuelve [{nombre_btca, titulo, autor, ano, numero_ejemplares}]
+function buscarEnOtrasBtcas(ref){
+  if(!dfCatOtras.length) return [];
+  const {autor, titulo, ano: anoRef}=extraerApa(ref);
+  if(!titulo) return [];
+  const titNorm=norm(titulo);
+  const apellidos=apellidosDeAutor(autor||'');
+  const resultados=[];
+
+  for(const btca of dfCatOtras){
+    // Filtrar por autor si hay apellidos
+    let pool=btca.rows;
+    if(apellidos.length){
+      const conAp=btca.rows.filter(c=>apellidos.some(ap=>norm(c.autor||'').includes(ap)));
+      if(conAp.length) pool=conAp;
+    }
+
+    // Filtrar por año: solo ediciones >= año de la referencia (si el año está disponible)
+    if(anoRef && anoRef > 0){
+      const poolConAno=pool.filter(c=>c.ano===0||c.ano>=anoRef);
+      if(poolConAno.length) pool=poolConAno;
+      // Si no hay ninguna con año >= ref, no incluir esta biblioteca
+      else continue;
+    }
+
+    // Mejor match por título
+    let mejor=null, mejorScore=0;
+    for(const c of pool){
+      const score=cobertura(titNorm,norm(c.titulo||''), pool.length<btca.rows.length);
+      if(score>mejorScore){mejorScore=score;mejor=c;}
+    }
+    if(mejor && mejorScore>=0.65){
+      resultados.push({
+        nombre: btca.nombre,
+        titulo: mejor.titulo,
+        autor:  mejor.autor,
+        ano:    mejor.ano,
+        numero_ejemplares: mejor.numero_ejemplares,
+        score:  Math.round(mejorScore*100)
+      });
+    }
+  }
+  return resultados;
+}
 function urlBuscalibre(q){ return `https://www.buscalibre.cl/libros/search?q=${encodeURIComponent(q)}`; }
 function urlScholar(q){ return `https://scholar.google.com/scholar?q=${encodeURIComponent('"'+q+'"')}`; }
 function urlDialnet(q){ return `https://dialnet.unirioja.es/buscar/documentos?querysDismax.DOCUMENTAL_TODO=${encodeURIComponent(q)}`; }
+
+function escHTML(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ── PROCESAR ─────────────────────────────────────────
 async function procesar(){
@@ -740,30 +871,56 @@ async function procesar(){
   document.getElementById('filterRow').classList.add('show');
   document.getElementById('gProgress').style.width='0%';
 
-  for(let i=0;i<dfRefs.length;i++){
-    const fila=dfRefs[i];
-    const ref=(fila.referencia||Object.values(fila)[0]||'').trim();
-    if(!ref) continue;
-    const tipo=clasificar(ref);
-    const {cands, aviso, hint}=(tipo==='Libro'||tipo==='Capítulo de libro')?topCandidatos(ref,nCand):{cands:[],aviso:'',hint:''};
-    const parsed=extraerApa(ref);
-    const apellidos=apellidosDeAutor(parsed.autor||'');
-    const debug=`Extraído → autor: "${parsed.autor||'?'}" | título: "${parsed.titulo||'?'}" | apellidos buscados: [${apellidos.join(', ')||'?'}]`;
-    const pr = planillaRefs[i] || {};
-    items.push({
-      idx:i+1, ref, tipo, candidatos:cands, aviso, hint:hint||'', titulo:parsed.titulo,
-      estado:'pend', confirmado:null, _debug: debug,
-      tipo_biblio: pr.tipo_biblio || 'básica',
-      clave: pr.clave || '',
-      nombre: pr.nombre || '',
-      _presel: (cands.length && cands[0]._score >= 80) ? 0 : null
-    });
-    document.getElementById('gProgress').style.width=Math.round((i+1)/dfRefs.length*100)+'%';
-    if(i%10===0) await new Promise(r=>setTimeout(r,0));
-  }
+  // Diagnóstico visible
+  const diagDiv = document.getElementById('reviewList');
+  diagDiv.innerHTML=`<div style="padding:1rem;color:var(--muted);font-size:.8rem">⏳ Procesando ${dfRefs.length} referencias…</div>`;
 
-  renderAll();
-  updateStats();
+  try {
+    for(let i=0;i<dfRefs.length;i++){
+      const fila=dfRefs[i];
+      const ref=(fila.referencia||Object.values(fila)[0]||'').trim();
+      if(!ref) continue;
+      const tipo=clasificar(ref);
+      const {cands,aviso,hint}=(tipo==='Libro'||tipo==='Capítulo de libro')?topCandidatos(ref,nCand):{cands:[],aviso:'',hint:''};
+      const parsed=extraerApa(ref);
+      const apellidos=apellidosDeAutor(parsed.autor||'');
+      const debug=`Extraído → autor: "${parsed.autor||'?'}" | título: "${parsed.titulo||'?'}" | apellidos: [${apellidos.join(', ')||'?'}]`;
+      const pr=planillaRefs[i]||{};
+      const otrasBtcas=(tipo==='Libro'||tipo==='Capítulo de libro')?buscarEnOtrasBtcas(ref):[];
+      items.push({
+        idx:i+1, ref, tipo, candidatos:cands, aviso, hint:hint||'', titulo:parsed.titulo,
+        estado:'pend', confirmado:null, _debug:debug,
+        tipo_biblio:pr.tipo_biblio||'básica',
+        clave:pr.clave||'',
+        nombre:pr.nombre||'',
+        otras_btcas:otrasBtcas,
+        _presel:(cands.length&&cands[0]._score>=80)?0:null
+      });
+      document.getElementById('gProgress').style.width=Math.round((i+1)/dfRefs.length*100)+'%';
+      if(i%10===0) await new Promise(r=>setTimeout(r,0));
+    }
+
+    if(items.length===0){
+      diagDiv.innerHTML=`<div style="padding:1.5rem;color:var(--red);font-size:.85rem">
+        ⚠ No se encontraron referencias.<br/>
+        Verifica que la planilla tenga datos en la columna D y que la fila de datos empiece en la fila 5.
+        <br/>dfRefs.length = ${dfRefs.length} | planillaRefs.length = ${planillaRefs.length}
+      </div>`;
+      updateStats(); return;
+    }
+
+    renderAll();
+    updateStats();
+
+  } catch(err){
+    console.error('Error en procesar:', err);
+    diagDiv.innerHTML=`<div style="padding:1.5rem;color:var(--red);font-size:.85rem">
+      ⚠ Error al procesar: <code>${escHTML(err.message)}</code><br/>
+      Items procesados hasta el error: ${items.length}<br/>
+      <small>${escHTML(err.stack||'')}</small>
+    </div>`;
+    updateStats();
+  }
 }
 
 // ── RENDER ────────────────────────────────────────────
@@ -782,7 +939,7 @@ function renderCard(item){
   let headerHTML=`
     <div class="card-header">
       <div class="card-num">${item.idx}</div>
-      <div class="card-ref">${item.ref}</div>
+      <div class="card-ref">${escHTML(item.ref)}</div>
       <div class="card-tipo"><span class="tipo-pill">${item.tipo}</span></div>
       <div class="card-status ${stCls}">${stLbl}</div>
     </div>`;
@@ -855,9 +1012,13 @@ function renderCard(item){
     } else {
       // Resuelta
       const conf=item.confirmado;
+      const otrasBtcasHTML = item.otras_btcas?.length
+        ? '<br/><span style="color:var(--blue);font-size:.72rem">🏛 Otras bibliotecas: '
+          + item.otras_btcas.map(o=>`${o.nombre}: ${o.numero_ejemplares} ej.`).join(' · ')
+          + '</span>' : '';
       const banner=item.estado==='ok'
-        ? `<div class="resolved-banner show ok">✓ ${conf?.titulo||'—'} · ${conf?.autor||'—'} · ${conf?.ano||''} · ${conf?.numero_ejemplares||''} ej.</div>`
-        : `<div class="resolved-banner show no">✗ No encontrado en catálogo</div>`;
+        ? `<div class="resolved-banner show ok">✓ ${conf?.titulo||'—'} · ${conf?.autor||'—'} · ${conf?.ano||''} · ${conf?.numero_ejemplares||''} ej.${otrasBtcasHTML}</div>`
+        : `<div class="resolved-banner show no">✗ No encontrado en catálogo${otrasBtcasHTML}</div>`;
       bodyHTML=banner;
       const ob=item.tipo_biblio==='obligatoria';
       actionsHTML=`<div class="card-actions">
@@ -1026,13 +1187,20 @@ function filtrar(){
     return true;
   });
   visible.forEach(item=>{
-    const card=renderCard(item);
-    list.appendChild(card);
-    // Si sin candidatos y tiene hint → disparar búsqueda automática
-    if(item.estado==='pend' && !item.candidatos.length && item.hint){
-      const manualId=`manual_${item.idx}`;
-      const manualResId=`manualRes_${item.idx}`;
-      setTimeout(()=>buscarManual(item.idx, manualId, manualResId), 50);
+    try{
+      const card=renderCard(item);
+      list.appendChild(card);
+      if(item.estado==='pend' && !item.candidatos.length && item.hint){
+        const manualId=`manual_${item.idx}`;
+        const manualResId=`manualRes_${item.idx}`;
+        setTimeout(()=>buscarManual(item.idx, manualId, manualResId), 50);
+      }
+    } catch(err){
+      console.error('renderCard error item',item.idx,err);
+      const d=document.createElement('div');
+      d.style.cssText='padding:.5rem 1rem;color:var(--red);font-size:.75rem;background:#fdf0f0;border-radius:6px;margin:.25rem 0';
+      d.textContent=`⚠ Error ref ${item.idx}: ${err.message}`;
+      list.appendChild(d);
     }
   });
   if(!visible.length){
@@ -1077,8 +1245,23 @@ function exportar(){
         const conf = item.confirmado;
         const esArt = item.tipo === 'Artículo de revista';
         const enc   = item.estado === 'ok';
-        const ejems = enc && !esArt && conf?.numero_ejemplares
-          ? String(conf.numero_ejemplares) + (conf.ano ? ' - ' + conf.ano : '') : '';
+
+        // Btca UA (col E)
+        const ejUA = enc && !esArt && conf?.numero_ejemplares ? parseInt(conf.numero_ejemplares)||0 : 0;
+        const ejUAStr = ejUA ? String(ejUA)+(conf?.ano?' - '+conf.ano:'') : '';
+
+        // Otras Btcas (col F) — total con desglose por biblioteca
+        const otrasList = item.otras_btcas||[];
+        const ejOtras = otrasList.reduce((s,o)=>s+(parseInt(o.numero_ejemplares)||0),0);
+        const ejOtrasStr = ejOtras
+          ? ejOtras + (otrasList.length
+              ? ' (' + otrasList.map(o=>`${o.nombre}:${o.numero_ejemplares}`).join(', ') + ')'
+              : '')
+          : '';
+
+        // Total (col G)
+        const ejTotal = ejUA + ejOtras;
+
         const artD  = enc && esArt ? 'on line' : '';
         const obs   = item.estado === 'no'   ? 'No encontrado en catálogo'
                     : item.estado === 'pend' ? 'Pendiente'
@@ -1086,18 +1269,18 @@ function exportar(){
                     : '';
 
         aoa.push([
-          primeraAsig && primeraTipo ? grupo.clave   : null,  // A
-          primeraAsig && primeraTipo ? grupo.nombre  : null,  // B
-          primeraTipo                ? tipoLabel     : null,  // C
-          item.ref,                                           // D
-          enc && !esArt ? (conf?.numero_ejemplares||'') : '', // E Btca UA
-          '',                                                 // F Otras Btcas
-          enc && !esArt ? (conf?.numero_ejemplares||'') : '', // G Total
-          '',                                                 // H URL online
-          artD,                                              // I Artículo
-          obs,                                               // J Observaciones
-          item.estado === 'no' ? 'Buscalibre' : '',          // K Proveedor
-          '',                                                // L Valor pesos
+          primeraAsig && primeraTipo ? grupo.clave   : null,
+          primeraAsig && primeraTipo ? grupo.nombre  : null,
+          primeraTipo                ? tipoLabel     : null,
+          item.ref,
+          ejUAStr,                 // E Btca UA
+          ejOtrasStr,              // F Otras Btcas
+          ejTotal || '',           // G Total
+          '',                      // H URL online
+          artD,                    // I Artículo
+          obs,                     // J Observaciones
+          item.estado==='no' ? 'Buscalibre' : '',
+          '',
         ]);
         primeraTipo = false;
         primeraAsig = false;
