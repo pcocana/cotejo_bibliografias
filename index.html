@@ -367,7 +367,7 @@ header {
     <div class="h-title">Asistente de Verificación APA 7</div>
     <div class="h-sub">Sistema de Bibliotecas · PUCV</div>
   </div>
-  <div class="h-badge">v3.0 · revisión humana</div>
+  <div class="h-badge">v3.1 · revisión humana</div>
 </header>
 <div class="global-progress"><div class="global-progress-fill" id="gProgress"></div></div>
 
@@ -641,13 +641,50 @@ function cobertura(refStr, catStr, autorConfirmado=false){
 }
 
 // ── CLASIFICADOR ─────────────────────────────────────
+// Detecta artículos científicos con un sistema de puntuación multi-señal.
+// Tolerante a variaciones de formato (APA, IEEE, Vancouver, exportaciones de Zotero, etc.)
+function _puntuarArticulo(r){
+  let pts = 0;
+  // ── Señales FUERTES (+3 / +2) ───────────────────────
+  // DOI explícito
+  if(/doi\.org|doi\s*:\s*10\.\d{4}/i.test(r))                          pts += 3;
+  // Patrón estructural APA: "Nombre Revista, 54, 131–142" o "Nombre, 12(3), 45-67" o "22(3–4), 597–605"
+  // Acepta número de fascículo con rango: (3–4), y páginas de hasta 5 dígitos (revistas IEEE, etc.)
+  if(/,\s*\d+\s*(?:\([\d–\-]+\))?\s*,\s*\d{1,5}\s*[–\-]\s*\d{1,5}/i.test(r)) pts += 3;
+  // Volumen + número explícitos: "12(3)", "22(3–4)", "Vol. 12", "v.12", "núm.", "No."
+  if(/\b(vol\.?\s*\d+|v\.\s*\d+|\d+\s*\([\d–\-]+\)|\d+\s*,\s*\(\d+\)|n[°uú]m\.?\s*\d+|no\.?\s*\d+)/i.test(r)) pts += 2;
+  // Rango de páginas: "45-67", "45–67", "pp. 45-67", "págs. 45-67" — hasta 5 dígitos (IEEE, etc.)
+  // Excluye rangos de edición: "2nd ed", "4th ed"
+  if(/(p[aá]gs?\.?\s*\d+\s*[–\-]\s*\d+|\b\d{1,5}\s*[–\-]\s*\d{1,5}\b(?!\s*(ed|edic|edn|edición)))/i.test(r)) pts += 2;
+  // Nombre de revista / journal (vocabulario amplio, bilingüe)
+  if(/(revista\s+de |journal\b|review\b|quarterly\b|bulletin\b|annals?\b|proceedings\b|transactions\b|gazette\b|herald\b|ciencias\b|estudios\s+de\b|anuario\b|cuadernos\b)/i.test(r)) pts += 2;
+  // ── Señales MEDIAS (+1) ──────────────────────────────
+  // URL académica que no es editorial comercial conocida
+  if(/https?:\/\//i.test(r) && !/buscalibre|amazon|goodreads|editorial|mcgraw|wiley|springer|pearson/i.test(r)) pts += 1;
+  // Número de fascículo explícito sin "vol." previo
+  if(/\bissue\s*\d+\b/i.test(r)) pts += 1;
+  // ── Señales NEGATIVAS (indicadores de libro) ─────────
+  // Editorial conocida en la referencia
+  if(/(editorial|editores?|publishers?|cepe|mcgraw|pearson|cengage|wiley|springer|elsevier|reverte|prentice)\b/i.test(r)) pts -= 1;
+  // Indicador explícito de edición de libro
+  if(/(primera|segunda|tercera|cuarta|quinta|\d+[aª°]\s*(ed|edic)|\d+(th|nd|rd|st)\s+ed)\b/i.test(r))           pts -= 2;
+  // Tesis: señal muy negativa
+  if(/\btesis\b|\bmemoria\s+de\s+(grado|t[ií]tulo)/i.test(r))          pts -= 5;
+  return pts;
+}
+
 function clasificar(ref){
-  const r=ref.toLowerCase();
-  if(/\(\d{4}\).*?\d+(\(\d+\))?.*\d+[–\-]\d+/.test(r)&&(r.includes('revista')||r.includes('vol')||/\d+\s*\(\d+\)/.test(r))) return 'Artículo de revista';
-  if(r.includes('tesis')||r.includes('memoria')) return 'Tesis';
-  if(r.includes('congreso')||r.includes('coloquio')||r.includes('ponencia')) return 'Congreso';
-  if(r.includes('recuperado de')||/https?:\/\//.test(r)) return 'Recurso web';
-  if(r.includes(' en ')&&(r.includes('ed.')||r.includes('editor'))) return 'Capítulo de libro';
+  const r = ref.toLowerCase().replace(/\s+/g,' ');
+  // Tesis y congresos: prioridad absoluta (no son artículos)
+  if(/\btesis\b|\bmemoria\s+de\s+(grado|t[ií]tulo)/i.test(r))             return 'Tesis';
+  if(/\bcongreso\b|\bcoloquio\b|\bponencia\b|\bsimposio\b/i.test(r))       return 'Congreso';
+  // Sistema de puntuación para artículos
+  const pts = _puntuarArticulo(r);
+  if(pts >= 3)                                                               return 'Artículo de revista';
+  // Recurso web (solo si no fue clasificado como artículo)
+  if(/recuperado\s+de\b|https?:\/\//i.test(r))                             return 'Recurso web';
+  // Capítulo de libro
+  if(/\s+en\s+.{3,60}(ed\.|editor(?:es)?|comp\.)/i.test(r))               return 'Capítulo de libro';
   return 'Libro';
 }
 
@@ -755,7 +792,7 @@ function apellidosDeAutor(autorStr){
 }
 
 function topCandidatos(ref, n){
-  const {autor, titulo} = extraerApa(ref);
+  const {autor, titulo, ano: anoRef} = extraerApa(ref);
   const titNorm = titulo ? norm(titulo) : '';
   const titTokens = titNorm ? tokens(titNorm) : [];
   const modo = document.getElementById('modoMatch').value;
@@ -764,11 +801,11 @@ function topCandidatos(ref, n){
   let aviso = '';
   let apellidosUsados = [];
 
+  // ── 1. Filtrar por autor ──────────────────────────────
   if(modo === 'autor_titulo' && autor){
     const apellidos = apellidosDeAutor(autor);
     apellidosUsados = apellidos;
 
-    // Intentar cada apellido y unir los pools
     let poolSet = new Set();
     let encontrado = false;
     for(const ap of apellidos){
@@ -779,9 +816,22 @@ function topCandidatos(ref, n){
     if(encontrado){
       pool = [...poolSet];
     } else {
-      // Sin ningún autor → buscar solo si título tiene 2+ tokens
       aviso = `Autores [${apellidos.join(', ')}] no encontrados — buscando por título`;
       pool = titTokens.length >= 2 ? dfCat : [];
+    }
+  }
+
+  // ── 2. Filtrar por año (catálogo ≥ año referencia) ───
+  if(anoRef && anoRef > 0 && pool.length){
+    const poolConAno = pool.filter(c => c.ano === 0 || c.ano >= anoRef);
+    if(poolConAno.length){
+      pool = poolConAno;
+    } else {
+      // Sin registros con edición válida: conservar pool pero avisar
+      aviso = (aviso ? aviso + ' · ' : '') +
+              `Sin ediciones ≥ ${anoRef} en catálogo UA (mostrando más recientes)`;
+      // Mostrar los más cercanos al año de la referencia como fallback
+      pool = pool.slice().sort((a,b)=>Math.abs(a.ano-anoRef)-Math.abs(b.ano-anoRef)).slice(0,50);
     }
   }
 
@@ -794,8 +844,9 @@ function topCandidatos(ref, n){
     return { cands:[], aviso, hint: titTokens.slice(0,4).join(' ') };
   }
 
-  // Si el pool fue filtrado por autor, podemos usar max(covRef,covCat)
-  // Si buscamos en todo el catálogo sin autor, usamos media geométrica (más estricto)
+  // ── 3. Scoring de cobertura título ───────────────────
+  // Si el pool fue filtrado por autor → max(covRef,covCat)
+  // Si buscamos en todo el catálogo sin autor → media geométrica (más estricto)
   const autorConfirmado = pool.length < dfCat.length;
   const minScore = titTokens.length <= 1 ? 0.8 : 0.2;
 
@@ -812,37 +863,45 @@ function topCandidatos(ref, n){
 
 // Búsqueda automática en catálogos de otras bibliotecas
 // Devuelve [{nombre_btca, titulo, autor, ano, numero_ejemplares}]
+// Regla: autor (parcial) + título (cobertura) + año catálogo ≥ año referencia
 function buscarEnOtrasBtcas(ref){
   if(!dfCatOtras.length) return [];
   const {autor, titulo, ano: anoRef}=extraerApa(ref);
   if(!titulo) return [];
   const titNorm=norm(titulo);
+  const titTks=tokens(titNorm);
   const apellidos=apellidosDeAutor(autor||'');
   const resultados=[];
 
   for(const btca of dfCatOtras){
-    // Filtrar por autor si hay apellidos
+    // ── 1. Filtrar por autor (tolerante: basta con un apellido coincidente) ──
     let pool=btca.rows;
+    let autorFiltrado=false;
     if(apellidos.length){
-      const conAp=btca.rows.filter(c=>apellidos.some(ap=>norm(c.autor||'').includes(ap)));
-      if(conAp.length) pool=conAp;
+      const conAp=btca.rows.filter(c=>
+        apellidos.some(ap=>ap.length>=3 && norm(c.autor||'').includes(ap))
+      );
+      if(conAp.length){ pool=conAp; autorFiltrado=true; }
+      // Si no hay coincidencia de autor y el título es corto, omitir esta btca
+      else if(titTks.length < 3){ continue; }
     }
 
-    // Filtrar por año: solo ediciones >= año de la referencia (si el año está disponible)
+    // ── 2. Filtrar por año: catálogo ≥ año referencia ──────────────────────
     if(anoRef && anoRef > 0){
       const poolConAno=pool.filter(c=>c.ano===0||c.ano>=anoRef);
       if(poolConAno.length) pool=poolConAno;
-      // Si no hay ninguna con año >= ref, no incluir esta biblioteca
-      else continue;
+      else continue; // Sin ediciones válidas: omitir esta biblioteca
     }
 
-    // Mejor match por título
+    // ── 3. Mejor match por cobertura de título ────────────────────────────
     let mejor=null, mejorScore=0;
     for(const c of pool){
-      const score=cobertura(titNorm,norm(c.titulo||''), pool.length<btca.rows.length);
+      const score=cobertura(titNorm,norm(c.titulo||''), autorFiltrado);
       if(score>mejorScore){mejorScore=score;mejor=c;}
     }
-    if(mejor && mejorScore>=0.65){
+    // Umbral: 0.65 con autor confirmado, 0.75 sin autor (más exigente)
+    const umbral = autorFiltrado ? 0.65 : 0.75;
+    if(mejor && mejorScore>=umbral){
       resultados.push({
         nombre: btca.nombre,
         titulo: mejor.titulo,
