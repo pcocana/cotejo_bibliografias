@@ -464,9 +464,12 @@ let planillaOrigAoa = [];
 const COL_MAP = {
   titulo:            ['titulo','title','245a','245','nombre','ttl','titulo_del_libro'],
   autor:             ['autor','author','100a','100','autores','autor_principal'],
-  ano:               ['ano','anio','year','fecha','date','publicacion','anio_publicacion'],
+  ano:               ['ano','anio','year','fecha','date','publicacion','anio_publicacion','ed_ano'],
   numero_ejemplares: ['numero_ejemplares','ejemplares','copies','items','cantidad','copias','num_ejemplares'],
-  referencia:        ['referencia','reference','ref','cita','bibliografia','apa','fuente']
+  referencia:        ['referencia','reference','ref','cita','bibliografia','apa','fuente'],
+  estado:            ['estado_de_perdida','estado_perdida','estado'],
+  inventario:        ['inventario','n_inventario'],
+  prestamos:         ['prestamos','loans']
 };
 
 function normCol(c) {
@@ -509,18 +512,24 @@ async function onFilePlanilla(e){
   const ws=wb.Sheets[wb.SheetNames[0]];
   const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:null,raw:false});
 
-  planillaOrigAoa=aoa.slice(0,4);
-  planillaCarrera=String(aoa[0]?.[0]||'').replace(/carrera\s*o\s*programa\s*:\s*/i,'').trim();
+  // Detectar la fila de encabezado (Clave Asignatura) y la primera fila con referencia
+  let hdr=aoa.findIndex(r=>r&&/clave/i.test(String(r[0]||'')));
+  if(hdr<0) hdr=0;
+  let ini=aoa.findIndex((r,i)=>i>hdr&&r&&r[3]&&String(r[3]).trim());
+  if(ini<0) ini=hdr+1;
+  planillaOrigAoa=(ini===4&&hdr===1)?aoa.slice(0,4):[];
+  const filaCarrera=aoa.slice(0,hdr+1).map(r=>String((r&&r[0])||'')).find(t=>/carrera|programa/i.test(t));
+  planillaCarrera=filaCarrera?filaCarrera.replace(/carrera\s*o\s*programa\s*:\s*/i,'').trim():f.name.replace(/\.[^.]+$/,'');
 
   planillaRefs=[];
-  let clave='',nombre='',tipo_biblio='básica';
-  for(let i=4;i<aoa.length;i++){
+  let clave='',nombre='',tipo_biblio='obligatoria';
+  for(let i=ini;i<aoa.length;i++){
     const row=aoa[i]||[];
     const ref=(row[3]||'').toString().trim();
     if(!ref||ref==='null') continue;
     if(row[0]&&String(row[0]).trim()) clave=String(row[0]).trim();
     if(row[1]&&String(row[1]).trim()) nombre=String(row[1]).trim();
-    if(row[2]&&String(row[2]).trim()) tipo_biblio=String(row[2]).trim();
+    if(row[2]&&String(row[2]).trim()) tipo_biblio=/compl/i.test(String(row[2]))?'complementaria':'obligatoria';
     planillaRefs.push({ref,clave,nombre,tipo_biblio});
   }
 
@@ -532,6 +541,30 @@ async function onFilePlanilla(e){
   document.getElementById('zonePlanilla').classList.add('ok');
   checkReady();
 }
+// Estados (texto normalizado) que cuentan como ejemplar disponible; el vacío también cuenta
+const ESTADOS_DISPONIBLES=['en estanteria'];
+let infoCat='';
+function anoDe(s){ const m=String(s||'').match(/\b(1[5-9]\d{2}|20\d{2})\b/); return m?parseInt(m[1]):0; }
+// Si el export trae una fila por ejemplar, agrupa por autor+título+año y cuenta ejemplares totales y disponibles
+function prepCat(rows){
+  if(rows.some(r=>r.numero_ejemplares)){
+    infoCat='con columna de ejemplares';
+    return rows.map(r=>{const n=parseInt(r.numero_ejemplares)||1; return {...r,ano:anoDe(r.ano),numero_ejemplares:n,total_ejemplares:n};});
+  }
+  const g=new Map(), est={};
+  rows.forEach(r=>{
+    const ano=anoDe(r.ano), k=norm(r.autor||'')+'|'+norm(r.titulo)+'|'+ano;
+    const e=norm(r.estado||''), disp=!e||ESTADOS_DISPONIBLES.some(x=>e.includes(x));
+    const lbl=r.estado||'(vacío)'; est[lbl]=(est[lbl]||0)+1;
+    let o=g.get(k);
+    if(!o){ o={...r,ano,numero_ejemplares:0,total_ejemplares:0,prestamos:0}; g.set(k,o); }
+    o.total_ejemplares++; if(disp) o.numero_ejemplares++;
+    o.prestamos+=parseInt(r.prestamos)||0;
+  });
+  infoCat='estados: '+Object.entries(est).map(([k,v])=>k+' '+v).join(' · ');
+  return [...g.values()];
+}
+
 async function onFileCat(e){
   const f=e.target.files[0]; if(!f) return;
   document.getElementById('stCat').textContent='⏳ Leyendo...';
@@ -541,12 +574,12 @@ async function onFileCat(e){
     const buf=await f.arrayBuffer();
     const wb=XLSX.read(buf,{type:'array'});
     const ws=wb.Sheets[wb.SheetNames[0]];
-    dfCat=parsearHojaXlsx(ws).map(r=>({...r,ano:parseInt(r.ano)||0,numero_ejemplares:parseInt(r.numero_ejemplares)||1}));
-    document.getElementById('stCat').textContent=`✓ ${dfCat.length} registros · xlsx`;
+    dfCat=prepCat(parsearHojaXlsx(ws));
+    document.getElementById('stCat').textContent=`✓ ${dfCat.length} obras · ${infoCat}`;
   } else {
     const {rows,enc}=await parseCSV(f);
-    dfCat=rows.map(r=>({...r,ano:parseInt(r.ano)||0,numero_ejemplares:parseInt(r.numero_ejemplares)||1}));
-    document.getElementById('stCat').textContent=`✓ ${dfCat.length} registros · ${enc}`;
+    dfCat=prepCat(rows);
+    document.getElementById('stCat').textContent=`✓ ${dfCat.length} obras · ${enc} · ${infoCat}`;
   }
   document.getElementById('zoneCat').classList.add('ok');
   checkReady();
@@ -562,8 +595,7 @@ async function onFileOtras(e){
   const wb=XLSX.read(buf,{type:'array'});
   btcasAll=[];
   for(const nombre of wb.SheetNames){
-    const rows=parsearHojaXlsx(wb.Sheets[nombre])
-      .map(r=>({...r,ano:parseInt(r.ano)||0,numero_ejemplares:parseInt(r.numero_ejemplares)||1}));
+    const rows=prepCat(parsearHojaXlsx(wb.Sheets[nombre]));
     if(rows.length) btcasAll.push({nombre, rows, excluida:false});
   }
   aplicarBtcas();
@@ -643,7 +675,7 @@ function cobertura(refStr, catStr, autorConfirmado=false){
 // ── CLASIFICADOR ─────────────────────────────────────
 // Detecta artículos científicos con un sistema de puntuación multi-señal.
 // Tolerante a variaciones de formato (APA, IEEE, Vancouver, exportaciones de Zotero, etc.)
-function _puntuarArticulo(r){
+function _puntuarArticulo0(r){
   let pts = 0;
   // ── Señales FUERTES (+3 / +2) ───────────────────────
   // DOI explícito
@@ -673,7 +705,7 @@ function _puntuarArticulo(r){
   return pts;
 }
 
-function clasificar(ref){
+function clasificar0(ref){
   const r = ref.toLowerCase().replace(/\s+/g,' ');
   // Tesis y congresos: prioridad absoluta (no son artículos)
   if(/\btesis\b|\bmemoria\s+de\s+(grado|t[ií]tulo)/i.test(r))             return 'Tesis';
@@ -686,6 +718,20 @@ function clasificar(ref){
   // Capítulo de libro
   if(/\s+en\s+.{3,60}(ed\.|editor(?:es)?|comp\.)/i.test(r))               return 'Capítulo de libro';
   return 'Libro';
+}
+
+// Ajustes: los DOI/URL no deben contar como volumen o páginas; un libro con DOI (p. ej. Springer) sigue siendo libro
+function _puntuarArticulo(r){
+  const sinUrl=r.replace(/https?:\/\/\S+/gi,' ');
+  let pts=_puntuarArticulo0(sinUrl);
+  if(/doi\.org|doi\s*:\s*10\./i.test(r)) pts+=3;
+  if(/\d+\s*\(\d+\)\s*,\s*\d+/.test(sinUrl)) pts+=1; // vol(núm), página
+  return pts;
+}
+function clasificar(ref){
+  const t=clasificar0(ref);
+  if(t==='Recurso web'&&/doi\.org|doi\s*:/i.test(ref)&&/(editorial|ediciones|springer|wiley|elsevier|press|publish|prentice|pearson|mcgraw|cengage)/i.test(ref)) return 'Libro';
+  return t;
 }
 
 // ── EXTRACCIÓN APA ────────────────────────────────────
@@ -713,9 +759,9 @@ function limpiarTitulo(tit){
   tit = tit.replace(/[\u201C\u201D\u201E\u201F\u00AB\u00BB]/g,'"')
             .replace(/[\u2018\u2019]/g,"'");
   // Quitar comillas iniciales
-  tit = tit.replace(/^["']+/, '');
+  const abre=/^["']/.test(tit); tit = tit.replace(/^["']+/, '');
   // Quitar desde la primera comilla de cierre (con lo que sigue: ", Ed. / ", Vol. / etc.)
-  tit = tit.replace(/["']\s*,?.*$/, '');
+  if(abre) tit = tit.replace(/["']\s*,?.*$/, '');
   // Quitar sufijos tipo ", Ed." / ", Editorial" / ": Ed. Mc. Graw"
   tit = tit.replace(/[,;:]\s*(ed\.|editorial|editores?|vol\.|tomo|publishers?|press)\s*.*$/i, '');
   return tit.trim();
@@ -740,7 +786,7 @@ function extraerApa(ref){
   const r=ref.replace(/[\n\r]/g,' ').replace(/\s{2,}/g,' ').trim();
 
   // ── Estrategia 1: año entre paréntesis (APA estándar) ──────────────────
-  const mP=r.match(/\(\s*(\d{4}[a-z]?)\s*\)/);
+  const mP=r.match(/\(\s*(?:[A-Za-záéíóúñ]+\.?,?\s*)?(\d{4}[a-z]?)(?:\s*[-–]\s*\d{4}[a-z]?)?\s*\)/);
   if(mP){
     const anoStr=mP[0], ano=parseInt(mP[1]);
     const pos=r.indexOf(anoStr);
@@ -855,7 +901,7 @@ function topCandidatos(ref, n){
     .filter(x => x.score >= minScore)
     .sort((a,b) => b.score-a.score)
     .slice(0, n)
-    .map(x => ({...x.c, _score: Math.round(x.score*100)}));
+    .map(x => ({...x.c, _score: Math.round(x.score*100), _antigua: !!(anoRef && x.c.ano && x.c.ano < anoRef)}));
 
   const hint = titTokens.slice(0,4).join(' ');
   return { cands, aviso, hint };
@@ -953,7 +999,7 @@ async function procesar(){
         clave:pr.clave||'',
         nombre:pr.nombre||'',
         otras_btcas:otrasBtcas,
-        _presel:(cands.length&&cands[0]._score>=80)?0:null
+        _presel:(cands.length&&cands[0]._score>=80&&!cands[0]._antigua)?0:null
       });
       document.getElementById('gProgress').style.width=Math.round((i+1)/dfRefs.length*100)+'%';
       if(i%10===0) await new Promise(r=>setTimeout(r,0));
@@ -962,7 +1008,7 @@ async function procesar(){
     if(items.length===0){
       diagDiv.innerHTML=`<div style="padding:1.5rem;color:var(--red);font-size:.85rem">
         ⚠ No se encontraron referencias.<br/>
-        Verifica que la planilla tenga datos en la columna D y que la fila de datos empiece en la fila 5.
+        Verifica que la planilla tenga datos en la columna D y que tenga el encabezado "Clave Asignatura" seguido de las referencias.
         <br/>dfRefs.length = ${dfRefs.length} | planillaRefs.length = ${planillaRefs.length}
       </div>`;
       updateStats(); return;
@@ -992,14 +1038,15 @@ function renderCard(item){
 
   // Texto de estado
   const stMap={pend:['st-pending','● Pendiente'],ok:['st-found','✓ Confirmado'],no:['st-notfound','✗ No encontrado']};
-  const [stCls,stLbl]=stMap[item.estado];
+  let [stCls,stLbl]=stMap[item.estado];
+  if(item.estado==='no'&&item.otras_btcas&&item.otras_btcas.length){ stCls='st-found'; stLbl='🏛 Solo en otras bibliotecas'; }
 
   // Header
   let headerHTML=`
     <div class="card-header">
       <div class="card-num">${item.idx}</div>
       <div class="card-ref">${escHTML(item.ref)}</div>
-      <div class="card-tipo"><span class="tipo-pill">${item.tipo}</span></div>
+      <div class="card-tipo"><select class="tipo-pill" style="border:0;font:inherit;cursor:pointer" title="Cambiar tipo de recurso" onchange="cambiarTipoRecurso(${item.idx},this.value)">${[...new Set([...TIPOS_RECURSO,item.tipo])].map(t=>`<option${t===item.tipo?' selected':''}>${t}</option>`).join('')}</select></div>
       <div class="card-status ${stCls}">${stLbl}</div>
     </div>`;
 
@@ -1026,9 +1073,9 @@ function renderCard(item){
             <div class="cand-score ${scoreClass(c._score)}">${c._score}%</div>
             <div class="cand-info">
               <div class="cand-titulo">${c.titulo||'—'}${preTag}</div>
-              <div class="cand-meta">${c.autor||'—'} · ${c.ano||'s/f'}</div>
+              <div class="cand-meta">${c.autor||'—'} · ${c.ano||'s/f'}${c._antigua?' · ⚠ edición anterior':''}${c.prestamos?' · '+c.prestamos+' préstamos':''}</div>
             </div>
-            <div class="cand-ejemplares">${c.numero_ejemplares}<span>ej.</span></div>
+            <div class="cand-ejemplares">${c.numero_ejemplares}${c.total_ejemplares>c.numero_ejemplares?'/'+c.total_ejemplares:''}<span>ej.</span></div>
           </div>`;
         });
       } else {
@@ -1063,7 +1110,7 @@ function renderCard(item){
       const confLabel = (selActual && !selActual.fromManual && item.candidatos[selActual.ci])
         ? `✓ Confirmar: "${(item.candidatos[selActual.ci].titulo||'').substring(0,30)}..."`
         : '✓ Confirmar seleccionado';
-      actionsHTML=`<div class="card-actions">
+      actionsHTML=otrasPend(item)+`<div class="card-actions">
         <button class="btn-confirm" onclick="confirmarSelected(${item.idx})">${confLabel}</button>
         <button class="btn-notfound" onclick="marcarNoEncontrado(${item.idx})">✗ No está en catálogo</button>
         <a href="${burl}" target="_blank" class="link-search">🔍 Buscalibre</a>
@@ -1143,7 +1190,8 @@ function selCand(idx, ci, fromManual=false){
 
 // Búsqueda manual en tiempo real dentro del catálogo
 function buscarManual(idx, inputId, resId){
-  const q=document.getElementById(inputId).value.trim();
+  const inp=document.getElementById(inputId); if(!inp) return;
+  const q=inp.value.trim();
   const resDiv=document.getElementById(resId);
   if(!resDiv) return;
   if(q.length<2){ resDiv.innerHTML=''; return; }
@@ -1160,7 +1208,8 @@ function buscarManual(idx, inputId, resId){
     .sort((a,b)=>b.hit-a.hit)
     .slice(0,6);
 
-  if(!resultados.length){ resDiv.innerHTML=`<div class="no-cands" style="margin-top:.3rem">Sin resultados en catálogo para "${q}"</div>`; return; }
+  const otrasRes=buscarManualOtras(idx,qn);
+  if(!resultados.length&&!otrasRes){ resDiv.innerHTML=`<div class="no-cands" style="margin-top:.3rem">Sin resultados en catálogo para "${q}"</div>`; return; }
 
   resDiv.innerHTML=resultados.map((r,mi)=>`
     <div class="candidate" id="mcand_${idx}_${mi}" onclick="selCandManual(${idx},${mi},${JSON.stringify(r.c).replace(/"/g,'&quot;')})">
@@ -1169,8 +1218,8 @@ function buscarManual(idx, inputId, resId){
         <div class="cand-titulo">${r.c.titulo||'—'}</div>
         <div class="cand-meta">${r.c.autor||'—'} · ${r.c.ano||'s/f'}</div>
       </div>
-      <div class="cand-ejemplares">${r.c.numero_ejemplares}<span>ej.</span></div>
-    </div>`).join('');
+      <div class="cand-ejemplares">${r.c.numero_ejemplares}${r.c.total_ejemplares>r.c.numero_ejemplares?'/'+r.c.total_ejemplares:''}<span>ej.</span></div>
+    </div>`).join('')+otrasRes;
 }
 
 // Mapa temporal de candidatos manuales
@@ -1197,6 +1246,43 @@ function confirmarSelected(idx){
 function marcarNoEncontrado(idx){ const item=items.find(x=>x.idx===idx); if(!item) return; item.estado='no'; item.confirmado=null; reRenderCard(item); updateStats(); }
 function marcarArticulo(idx){ const item=items.find(x=>x.idx===idx); if(!item) return; item.estado='ok'; item.confirmado={titulo:'Verificado externamente',autor:'',ano:'',numero_ejemplares:''}; reRenderCard(item); updateStats(); }
 function marcarOk(idx){ const item=items.find(x=>x.idx===idx); if(!item) return; item.estado='ok'; item.confirmado={titulo:'Verificado',autor:'',ano:'',numero_ejemplares:''}; reRenderCard(item); updateStats(); }
+const TIPOS_RECURSO=['Libro','Capítulo de libro','Artículo de revista','Tesis','Congreso','Recurso web'];
+// Cambiar manualmente el tipo de recurso: recalcula candidatos y búsqueda en otras bibliotecas
+function cambiarTipoRecurso(idx,nuevo){
+  const item=items.find(x=>x.idx===idx); if(!item||item.tipo===nuevo) return;
+  item.tipo=nuevo; item.estado='pend'; item.confirmado=null; delete selectedCand[idx];
+  if(nuevo==='Libro'||nuevo==='Capítulo de libro'){
+    const r=topCandidatos(item.ref,parseInt(document.getElementById('nCandidatos').value));
+    item.candidatos=r.cands; item.aviso=r.aviso; item.hint=r.hint||'';
+    item.otras_btcas=buscarEnOtrasBtcas(item.ref);
+    item._presel=(r.cands.length&&r.cands[0]._score>=80&&!r.cands[0]._antigua)?0:null;
+  } else { item.candidatos=[]; item.otras_btcas=[]; item._presel=null; }
+  reRenderCard(item); updateStats();
+}
+if(typeof setTipo==='undefined'){ window.setTipo=function(idx,t){ const it=items.find(x=>x.idx===idx); if(!it) return; it.tipo_biblio=t; reRenderCard(it); }; }
+function otrasPend(item){
+  if(!item.otras_btcas||!item.otras_btcas.length) return '';
+  return '<div style="color:var(--blue);font-size:.72rem;padding:.2rem 1rem">🏛 Otras bibliotecas: '+item.otras_btcas.map(o=>`${escHTML(o.nombre)}: ${o.numero_ejemplares} ej.`).join(' · ')+'</div>';
+}
+const _manOtras={};
+function buscarManualOtras(idx,qn){
+  const lst=[];
+  dfCatOtras.forEach(b=>{
+    b.rows.map(c=>{const tn=norm(c.titulo||''),an=norm(c.autor||'');return {c,hit:qn.split(' ').filter(w=>w.length>1&&(tn.includes(w)||an.includes(w))).length};})
+      .filter(x=>x.hit>0).sort((a,b)=>b.hit-a.hit).slice(0,2).forEach(x=>lst.push({nombre:b.nombre,c:x.c,hit:x.hit}));
+  });
+  if(!lst.length) return '';
+  _manOtras[idx]=lst.sort((a,b)=>b.hit-a.hit).slice(0,8);
+  return '<div style="font-size:.72rem;color:var(--blue);margin:.4rem 0 .2rem">🏛 Otras bibliotecas (clic para agregar)</div>'+
+    _manOtras[idx].map((r,i)=>`<div class="candidate" onclick="agregarOtra(${idx},${i})"><div class="cand-score med" style="background:var(--blue)">bib</div><div class="cand-info"><div class="cand-titulo">${escHTML(r.c.titulo||'—')}</div><div class="cand-meta">${escHTML(r.nombre)} · ${escHTML(r.c.autor||'—')} · ${r.c.ano||'s/f'}</div></div><div class="cand-ejemplares">${r.c.numero_ejemplares}<span>ej.</span></div></div>`).join('');
+}
+function agregarOtra(idx,i){
+  const item=items.find(x=>x.idx===idx), r=(_manOtras[idx]||[])[i]; if(!item||!r) return;
+  item.otras_btcas=(item.otras_btcas||[]).filter(o=>o.nombre!==r.nombre);
+  item.otras_btcas.push({nombre:r.nombre,titulo:r.c.titulo,autor:r.c.autor,ano:r.c.ano,numero_ejemplares:r.c.numero_ejemplares,score:0});
+  if(item.estado==='pend'){ item.estado='no'; item.confirmado=null; delete selectedCand[idx]; } // no está en el catálogo principal, sí en otra biblioteca
+  reRenderCard(item); updateStats();
+}
 function deshacer(idx){ const item=items.find(x=>x.idx===idx); if(!item) return; item.estado='pend'; item.confirmado=null; delete selectedCand[idx]; reRenderCard(item); updateStats(); }
 
 function reRenderCard(item){
@@ -1265,6 +1351,29 @@ function filtrar(){
   if(!visible.length){
     list.innerHTML='<div style="text-align:center;padding:2rem;color:var(--muted);font-size:.83rem">Sin resultados para el filtro actual.</div>';
   }
+}
+
+function resumenCobertura(){
+  const g=new Map();
+  items.filter(it=>it.tipo==='Libro'||it.tipo==='Capítulo de libro').forEach(it=>{
+    const t=/compl/i.test(it.tipo_biblio)?'Complementaria':'Obligatoria/básica', k=it.clave+'|'+t;
+    const o=g.get(k)||{c:it.clave,n:it.nombre,t,tot:0,ok:0,ot:0,no:0,pe:0};
+    o.tot++;
+    const enOtras=(it.otras_btcas||[]).some(x=>(parseInt(x.numero_ejemplares)||0)>0);
+    if(it.estado==='ok'&&!(it.confirmado&&it.confirmado.numero_ejemplares===0)) o.ok++;
+    else if(it.estado==='ok'||it.estado==='no'){ if(enOtras) o.ot++; else o.no++; }
+    else o.pe++;
+    g.set(k,o);
+  });
+  const pct=(a,b)=>b?Math.round(100*a/b)+'%':'—';
+  const aoa=[['Carrera','Clave','Asignatura','Tipo','Libros','Disponibles','Solo otras bibliotecas','No disponibles','Pendientes','% disponible','% incl. otras bibliotecas']];
+  const tot={};
+  [...g.values()].sort((a,b)=>(a.c+a.t).localeCompare(b.c+b.t)).forEach(o=>{
+    aoa.push([planillaCarrera,o.c,o.n,o.t,o.tot,o.ok,o.ot,o.no,o.pe,pct(o.ok,o.tot),pct(o.ok+o.ot,o.tot)]);
+    const x=tot[o.t]||(tot[o.t]={tot:0,ok:0,ot:0,no:0,pe:0}); x.tot+=o.tot;x.ok+=o.ok;x.ot+=o.ot;x.no+=o.no;x.pe+=o.pe;
+  });
+  Object.entries(tot).forEach(([t,x])=>aoa.push([planillaCarrera,'TOTAL','',t,x.tot,x.ok,x.ot,x.no,x.pe,pct(x.ok,x.tot),pct(x.ok+x.ot,x.tot)]));
+  return aoa;
 }
 
 function exportar(){
@@ -1362,6 +1471,7 @@ function exportar(){
 
   const wbOut = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wbOut, ws, 'Respaldo biblioteca');
+  XLSX.utils.book_append_sheet(wbOut, XLSX.utils.aoa_to_sheet(resumenCobertura()), 'Resumen cobertura');
   const fname = planillaCarrera
     ? `planilla_${planillaCarrera.replace(/\s+/g,'_').substring(0,30)}.xlsx`
     : 'planilla_bibliografia_apa7.xlsx';
