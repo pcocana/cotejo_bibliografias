@@ -357,6 +357,9 @@ header {
   background:var(--blue-bg); display:flex;align-items:center;gap:.3rem;
 }
 .art-link:hover { background:#d8e4f4; }
+.candidate .chk{width:18px;height:18px;border:2px solid #9aa5b1;border-radius:4px;flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:.78rem;line-height:1;color:white;background:white}
+.candidate.selected .chk{background:var(--navy);border-color:var(--navy)}
+.candidate.selected .chk::after{content:'✓'}
 </style>
 </head>
 <body>
@@ -782,7 +785,7 @@ function titDesdeTexto(after){
   return limpiarTitulo(tit.trim());
 }
 
-function extraerApa(ref){
+function extraerApa0(ref){
   const r=ref.replace(/[\n\r]/g,' ').replace(/\s{2,}/g,' ').trim();
 
   // ── Estrategia 1: año entre paréntesis (APA estándar) ──────────────────
@@ -833,11 +836,11 @@ function apellidosDeAutor(autorStr){
   // Capturar todas las palabras capitalizadas de 3+ chars (apellidos)
   const matches=autorStr.match(/\b([A-ZÁÉÍÓÚÜ][a-záéíóúü]{2,})\b/g)||[];
   // Eliminar palabras que son claramente no-apellidos
-  const noApellidos=new Set(['Potenciando','Pensamiento','Critico','Traves','Primera','Segunda','Tercera','Cuarta','Quinta','Editorial','Edicion','Ediciones','Universidad','Learning','Editores']);
-  return [...new Set(matches.map(m=>norm(m)).filter(m=>m.length>2&&!noApellidos.has(m)))];
+  const noApellidos=new Set(['Potenciando','Pensamiento','Critico','Traves','Primera','Segunda','Tercera','Cuarta','Quinta','Editorial','Edicion','Ediciones','Universidad','Learning','Editores','Eds','Comp','Coord','Coords']);
+  return [...new Set(matches.map(m=>norm(m)).filter(m=>m.length>2&&!noApellidos.has(m)&&!noApellidos.has(m.charAt(0).toUpperCase()+m.slice(1))))];
 }
 
-function topCandidatos(ref, n){
+function topCandidatos0(ref, n){
   const {autor, titulo, ano: anoRef} = extraerApa(ref);
   const titNorm = titulo ? norm(titulo) : '';
   const titTokens = titNorm ? tokens(titNorm) : [];
@@ -907,10 +910,364 @@ function topCandidatos(ref, n){
   return { cands, aviso, hint };
 }
 
+// ═══ MATCHER v2: lector flexible + índice de catálogo + evidencias por campo ═══════════
+// Se apoya en: norm, STOP, RE_EDIT, RE_EDIC, extraerApa0, apellidosDeAutor, dfCat, document
+const PARTICULAS=new Set(['van','von','der','den','di','da','dos','das','do','le','les','du','des','al','bin','ibn','st']);
+const RE_INIC=/^(?:[A-ZÁÉÍÓÚÜÑ]\.?(?:-[A-ZÁÉÍÓÚÜÑ]\.?)?|[A-ZÁÉÍÓÚÜÑ]-[A-ZÁÉÍÓÚÜÑ]{1,2}\.?|(?:[A-ZÁÉÍÓÚÜÑ]\.){2,4})$/;
+const RE_CONECT=/^(?:&|and|y|e|et|und)$/i;
+const RE_SEG_EDITORIAL=/^(?:springer|siam|wiley|birkh[aä]user|masson|pearson|cambridge|oxford|elsevier|dover|academic press|kluwer|mcgraw|prentice|addison|taylor|chapman|world scientific|american mathematical|universitext|texts in|graduate texts|pure and applied|classics in|lecture notes|cengage|revert[eé]|akal|paid[oó]s|ed\b|edici[oó]n|edition|vol\b|tomo|book\b|series|serie\b|\d)/i;
+
+// Divide por , ; : y ". " sin cortar tras iniciales ("A. Valli") ni abreviaturas
+function segmentar(r){
+  r=r.replace(/([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])\.([A-ZÁÉÍÓÚÜÑ][a-záéíóúüñ])/g,'$1. $2');
+  const parts=r.split(/(,\s+|;\s+|\.\s+|:\s+)/), out=[]; let cur='';
+  for(let i=0;i<parts.length;i+=2){
+    const sep=parts[i+1]||''; cur+=parts[i];
+    if(/^\.\s+/.test(sep)){
+      const w=cur.trim().split(/\s+/).pop();
+      if(/^[A-ZÁÉÍÓÚÜÑ]$/.test(w)||/^([A-ZÁÉÍÓÚÜÑ]\.)+[A-ZÁÉÍÓÚÜÑ]$/.test(w)||/^(ed|vol|no|pp|et|al|dr|prof)$/i.test(w)){ cur+='. '; continue; }
+    }
+    if(cur.trim()) out.push(cur.trim()); cur='';
+  }
+  if(cur.trim()) out.push(cur.trim());
+  const fin=[];
+  out.forEach((sg,k)=>{
+    const m=sg.match(/^((?:[A-ZÁÉÍÓÚÜÑ]\.\s?){1,3})\s*(\S.*)$/);
+    if(k>0&&m&&m[2].split(/\s+/).length>=3&&!/^[A-ZÁÉÍÓÚÜÑ]\.?(?:\s|$)/.test(m[2])){ fin.push(m[1].trim()); fin.push(m[2].trim()); }
+    else fin.push(sg);
+  });
+  return fin;
+}
+
+function limpiarTit2(t){
+  return (t||'').replace(/\s*\((?:book|vol|volume|libro)[^)]*\)\s*$/i,'').replace(/\s*\([^)]*\)\s*$/,'').replace(/[\s,.;:]+$/,'').trim();
+}
+
+// Lector para formatos no APA: "S. Lang, Algebra, 3rd ed., Springer, 2002." / 'Erwin Kreyszig, “Título”. Wiley, 1989.'
+function extraerFlexible(ref){
+  let r=ref.replace(/[\n\r]/g,' ').replace(/\s{2,}/g,' ').trim();
+  r=r.replace(/[“”„‟«»]/g,'"').replace(/[‘’]/g,"'").replace(/\(\s*(?:eds?|comp|coords?)\.?\s*\)\s*[.,]?/gi,' ').replace(/&;/g,'&').replace(/\s{2,}/g,' ');
+  const ys=[...r.matchAll(/\b(1[5-9]\d{2}|20\d{2})\b/g)].map(m=>parseInt(m[1]));
+  const ano=ys.length?ys[ys.length-1]:null;
+  // a) título entre comillas
+  const q=r.match(/^(.{2,150}?)\s*"([^"]{3,250})"/);
+  if(q){
+    const aut=q[1].replace(/[\s,.:;]+$/,'').trim();
+    if(aut.split(/\s+/).length<=10) return {autor:aut||null, ano, titulo:limpiarTit2(q[2])||null};
+  }
+  // b) sin comillas: primer segmento = autor; título = primer segmento que no es nombre
+  const segs=segmentar(r); if(!segs.length) return null;
+  const palabras=s=>s.split(/\s+/);
+  const esNombre=s=>{const w=palabras(s); return w.length<=6&&w.every(t=>RE_INIC.test(t)||RE_CONECT.test(t)||/^(et|al\.?)$/i.test(t)||/^[A-ZÁÉÍÓÚÜÑ][\wáéíóúüñ'’\-\.]+$/.test(t));};
+  const tieneInic=s=>palabras(s).some(t=>RE_INIC.test(t));
+  const soloInic=s=>palabras(s).every(t=>RE_INIC.test(t)||RE_CONECT.test(t));
+  if(!esNombre(segs[0])) return null;
+  const aut=[segs[0]]; let i=1;
+  while(i<segs.length){
+    const s=segs[i];
+    const ok = soloInic(s)
+      || (RE_CONECT.test(palabras(s)[0])&&esNombre(s))
+      || (tieneInic(s)&&esNombre(s)&&palabras(s).length<=4&&/^[A-ZÁÉÍÓÚÜÑ]\.?(?:-|\s|[A-ZÁÉÍÓÚÜÑ])/.test(s));
+    const cont = !ok && esNombre(s) && !tieneInic(s) && palabras(s).length<=3 && i+1<segs.length && soloInic(segs[i+1]) && tieneInic(aut[aut.length-1]);
+    if(ok){aut.push(s);i++;} else if(cont){aut.push(s,segs[i+1]);i+=2;} else break;
+  }
+  const t=segs[i];
+  if(!t||RE_SEG_EDITORIAL.test(t)) return {autor:aut.join(', '), ano, titulo:null};
+  return {autor:aut.join(', '), ano, titulo:limpiarTit2(t)||null};
+}
+
+function extraerApa(ref){
+  const p=extraerApa0(ref);
+  if(p.autor&&p.titulo) return p;
+  const f=extraerFlexible(ref);
+  if(f&&f.titulo&&f.autor) return {autor:f.autor, ano:f.ano||p.ano, titulo:f.titulo};
+  return p;
+}
+
+// Apellidos "primarios" (primer autor) y "otros" (coautores)
+function personasDe(autor){
+  if(!autor) return {primarias:[],otras:[]};
+  const a=autor.replace(/\bet\s+al\b\.?/gi,' ').replace(/\s+/g,' ').trim();
+  const lim=w=>norm(w).split(' ').filter(x=>x.length>=2&&!STOP.has(x)&&!PARTICULAS.has(x)&&!/^(eds?|comp|coords?|editors?)$/.test(x));
+  const tokInic=s=>s.split(/\s+/).some(t=>RE_INIC.test(t));
+  const m=a.match(/^([^,;&]+?)\s*[,;]\s*(.*)$/);
+  if(m&&!tokInic(m[1])&&m[1].split(/\s+/).length<=4){
+    const prim=lim(m[1]);
+    return {primarias:prim, otras:apellidosDeAutor(m[2]).filter(x=>!prim.includes(x)&&!/^(eds?|comp|coords?|editors?)$/.test(x))};
+  }
+  const chunks=a.split(/\s*(?:&|\band\b|\by\b|\bet\b|;)\s*/).filter(Boolean);
+  const sur=chunks.map(c=>{const ws=c.match(/[A-ZÁÉÍÓÚÜÑ][a-záéíóúüñ'’\-]+/g)||[]; return ws.length?ws[ws.length-1]:null;}).filter(Boolean);
+  if(!sur.length) return {primarias:[],otras:[]};
+  const prim=lim(sur[0]);
+  return {primarias:prim, otras:sur.slice(1).flatMap(lim).filter(x=>!prim.includes(x))};
+}
+
+// ── Índice del catálogo (se construye una sola vez por carga) ─────────────────────
+function stem(t){ return (t.length>3&&t.endsWith('s')&&!t.endsWith('ss'))?t.slice(0,-1):t; }
+function tokens2(s){ return s.split(' ').filter(t=>(t.length>1||/\d/.test(t))&&!STOP.has(t)).map(stem); }
+function quitarEd(t){ return (t||'').replace(/^\s*\(\s*(?:eds?|comp|coords?)\.?\s*\)[.,\s]*/i,'').replace(/\(\s*(?:vol|volume|vol\.|tomo)\.?\s*(\d+)\s*\)/gi,' $1 ').replace(/\b\d+(?:st|nd|rd|th|ra|da|va|a|ª|°)\.?\s*ed\w*\.?/gi,' ').replace(/\((?:\s*(?:\d+\w*\s*)?ed\w*\.?\s*)\)/gi,' '); }
+function variantesTitulo(t){
+  const out=new Set(), add=x=>{const n=norm(quitarEd(x||'')); if(n) out.add(n);};
+  let tt=(t||'').replace(/^\s*\(\s*(?:eds?|comp|coords?)\.?\s*\)[.,\s]*/i,''), libro=null, editores='';
+  const mc=tt.match(/^(.*?)\.?\s+(?:En|In)\s+(.*?)\((?:Ed\.?s?|Comp|Coords?)\.?s?\)\s*,?\s*(.*)$/i);
+  if(mc){ tt=mc[1]; editores=mc[2]; libro=(mc[3]||'').replace(/\s*\((?:pp|p|pág|págs|pags?)\b.*$/i,'').replace(/[.,;\s]+$/,''); }
+  const seg1=tt.split(/\.\s+(?=[A-ZÁÉÍÓÚÜÑ¿¡])/)[0];
+  add(tt); add(seg1); add(tt.split(/:\s|\s[-–—]\s/)[0]);
+  const libroVars=[]; if(libro){ [libro,libro.split(/:\s|\.\s/)[0]].forEach(x=>{const n=norm(quitarEd(x)); if(n&&tokens2(n).length>=2&&!libroVars.includes(n)) libroVars.push(n);}); }
+  const rest=tt.split(/\.\s+(?=[A-ZÁÉÍÓÚÜÑ¿¡])/)[1]||'';
+  const subOk=rest&&rest.split(/\s+/).length>=2&&!RE_EDIT.test(rest)&&!RE_SEG_EDITORIAL.test(rest)&&!/\b[A-Z]\.\s?[A-Z]?\.?/.test(rest);
+  return {vars:[...out], libroVars, main:norm(quitarEd(seg1)), editores, sub:subOk?tokens2(norm(rest)):[]};
+}
+function tituloMain(t){ return norm((t||'').split(/:\s|\s[-–—]\s|\.\s/)[0]); }
+const _meta=new WeakMap(), _idx=new WeakMap();
+function metaCat(c){
+  let m=_meta.get(c);
+  if(!m){
+    const t=quitarEd(c.titulo||'');
+    m={sur:new Set(norm((c.autor||'').split(',')[0]).split(' ').filter(x=>x.length>=2)), titN:norm(t), titM:tituloMain(t)};
+    m.tok=new Set(tokens2(m.titN)); _meta.set(c,m);
+  }
+  return m;
+}
+function indexarCat(rows){
+  rows=rows||dfCat;
+  let ix=_idx.get(rows);
+  if(ix) return ix;
+  ix={porSur:new Map(), porTok:new Map()};
+  for(const c of rows){
+    const m=metaCat(c);
+    m.sur.forEach(w=>{ if(!ix.porSur.has(w)) ix.porSur.set(w,[]); ix.porSur.get(w).push(c); });
+    m.tok.forEach(w=>{ if(w.length<=2&&!/\d/.test(w)) return; if(!ix.porTok.has(w)) ix.porTok.set(w,[]); ix.porTok.get(w).push(c); });
+  }
+  _idx.set(rows,ix); return ix;
+}
+
+function geo(a,b){
+  const A=tokens2(a), B=tokens2(b); if(!A.length||!B.length) return 0;
+  const sA=new Set(A), sB=new Set(B), i=[...sA].filter(t=>sB.has(t)).length;
+  return Math.sqrt((i/sA.size)*(i/sB.size));
+}
+function numsDe(s){ return new Set(tokens2(s).filter(t=>/^\d{1,3}$/.test(t))); }
+
+// ── Matcher por evidencias: autor (apellido completo) + título principal + tomo + año ──
+function topCandidatos(ref, n, rows){
+  const {autor, titulo, ano:anoRef}=extraerApa(ref);
+  if(!titulo) return {cands:[], aviso:'No se pudo interpretar la referencia (formato no estándar)', hint:'', noInterpretable:true};
+  const modo=document.getElementById('modoMatch').value;
+  // para capítulos ("... En X (Eds.), Libro") usar el texto completo tras el año: el lector APA lo trunca
+  let tVar=titulo;
+  const post=(ref.replace(/\s+/g,' ').split(/\(\s*[^)]*\d{4}[a-z]?\s*\)/)[1]||'').replace(/^[.\s,]+/,'');
+  if(/\b(?:En|In)\s/.test(post)&&/\((?:Ed|Eds|Ed\.s|Comp|Coords?)\b/i.test(post)) tVar=post;
+  const vt=variantesTitulo(tVar);
+  const refVars=vt.vars;
+  if(!refVars.length) return {cands:[], aviso:'No se pudo interpretar la referencia (formato no estándar)', hint:'', noInterpretable:true};
+  const refTok=tokens2(vt.main||refVars[0]);
+  const nR=numsDe(vt.main||refVars[0]);
+  const aniosRef=[...new Set([...ref.matchAll(/\b(1[5-9]\d{2}|20\d{2})\b/g)].map(m=>parseInt(m[1])))];
+  const nSegRef=((ref.replace(/\n/g,' ').split(/\(\s*[^)]*\d{4}[a-z]?\s*\)/)[1])||'').split(/\.\s+/).filter(x=>x.trim().length>1).length;
+  const idx=indexarCat(rows);
+  const {primarias,otras}=(modo==='autor_titulo'&&autor)?personasDe(autor):{primarias:[],otras:[]};
+  if(vt.editores){ const pe=personasDe(vt.editores.replace(/\bet\.?\s*$/i,'').trim()); [...pe.primarias,...pe.otras].forEach(w=>{ if(!primarias.includes(w)&&!otras.includes(w)) otras.push(w); }); }
+
+  const fuerte=new Set(), debil=new Set();
+  primarias.forEach(w=>(idx.porSur.get(w)||[]).forEach(c=>fuerte.add(c)));
+  otras.forEach(w=>(idx.porSur.get(w)||[]).forEach(c=>{ if(!fuerte.has(c)) debil.add(c); }));
+
+  const evalua=(c,rel,libre)=>{
+    const m=metaCat(c);
+    let ts=0;
+    for(const rv of refVars) for(const cv of [m.titN,m.titM]) if(cv) ts=Math.max(ts,geo(rv,cv));
+    let viaLibro=false;
+    if(vt.libroVars.length){ let tl=0; for(const lv of vt.libroVars) for(const cv of [m.titN,m.titM]) if(cv) tl=Math.max(tl,geo(lv,cv)); if(tl>ts&&tl>=0.75){ ts=tl; viaLibro=true; } }
+    const cTokArr=tokens2(m.titM||m.titN), rTokArr=tokens2(vt.main||refVars[0]);
+    const pref=(a,b)=>a.length>=2&&b.length>=a.length&&a.every((t,i)=>t===b[i]);
+    let parcial=false;
+    if(!viaLibro&&ts<0.8&&(pref(cTokArr,rTokArr)||pref(rTokArr,cTokArr))){ ts=Math.max(ts,0.8); parcial=true; }
+    let subDud=false;
+    if(!viaLibro&&vt.sub.length&&vt.sub.length<=2&&nSegRef>=3&&!/:\s*$/.test((c.titulo||'').trim())){ const cs=new Set(tokens2(m.titN)); const f=vt.sub.filter(t=>cs.has(t)).length/vt.sub.length; if(f<0.5) subDud=true; }
+    const nC=numsDe(m.titM||m.titN);
+    let volDud=false;
+    if(!viaLibro){
+      if(nR.size&&nC.size){ if(!libre&&![...nR].some(x=>nC.has(x))) return null; }   // tomos distintos: veto
+      else if(nR.size||nC.size) volDud=true;
+    }
+    const aC=c.ano||0; let antigua=false, anoEv='';
+    const citada=!!(aC&&aniosRef.includes(aC));
+    if(anoRef&&aC){
+      if(citada&&aC!==anoRef){anoEv='año citado en la referencia';}
+      else if(aC<anoRef-1){antigua=true;anoEv='ed. anterior';}
+      else if(aC===anoRef) anoEv='año =';
+      else if(aC>anoRef) anoEv='ed. posterior';
+      else anoEv='año ≈';
+    }
+    const minT = rel==='titulo'?0.75 : (refTok.length<=1?0.8:0.25);
+    if(!libre&&ts<minT) return null;
+    const verde = !libre && rel==='fuerte' && ts>=0.85 && !volDud && !antigua && !parcial && !subDud;
+    const ev=[viaLibro?'capítulo → libro contenedor ✔':'', libre?'solo autor ✔ (¿traducción u otra obra?)':rel==='fuerte'?'autor ✔':rel==='debil'?'coautor/editor':((c.autor||'').trim()?'autor no coincide':'registro sin autor en el catálogo'), 'título '+Math.round(ts*100)+'%', anoEv, volDud?'tomo?':'', parcial?'título parcial':'', subDud?'subtítulo no coincide':''].filter(Boolean).join(' · ');
+    const clave=ts*1000+(antigua?0:5)+((aC&&aC===anoRef)||citada?3:0)+(aC>=anoRef?1:0)+(rel==='fuerte'?2:0);
+    return {c,ts,antigua,verde,ev,rel,clave};
+  };
+
+  let res=[]; fuerte.forEach(c=>{const x=evalua(c,'fuerte'); if(x) res.push(x);});
+  debil.forEach(c=>{const x=evalua(c,'debil'); if(x) res.push(x);});
+
+  let aviso='';
+  const mejor=res.reduce((a,x)=>Math.max(a,x.ts),0);
+  if(mejor<0.8 && (refTok.length>=2||vt.libroVars.length)){
+    // el autor puede venir mal escrito o distinto en el catálogo: probar por título (solo ámbar)
+    if(autor&&primarias.length&&!fuerte.size) aviso=`Autor [${primarias.join(', ')}] no encontrado — buscando por título`;
+    const toks=[...new Set([...refTok,...vt.libroVars.flatMap(tokens2)])].filter(t=>idx.porTok.has(t)).sort((a,b)=>idx.porTok.get(a).length-idx.porTok.get(b).length).slice(0,3);
+    const vistos=new Set(res.map(x=>x.c)); const extra=new Set();
+    toks.forEach(t=>{const arr=idx.porTok.get(t); if(arr.length<=4000) arr.forEach(c=>{ if(!vistos.has(c)) extra.add(c); });});
+    extra.forEach(c=>{const x=evalua(c,'titulo'); if(x) res.push(x);});
+  }
+  // Mismo autor, título distinto (p. ej. traducción u otra edición en otro idioma): se ofrece para que decida quien revisa
+  const hayBueno=res.some(x=>x.rel==='fuerte'||x.ts>=0.7);
+  if(!hayBueno&&fuerte.size){
+    if(fuerte.size<=40){
+      const vistos2=new Set(res.map(x=>x.c)); const lib=[];
+      const mi=(autor||'').match(/^[^,;]+[,;]\s*([A-Za-zÁÉÍÓÚÑáéíóúñ])/); const iniRef=norm(mi?mi[1]:((autor||'').trim().charAt(0))).charAt(0);
+      fuerte.forEach(c=>{ if(vistos2.has(c)) return;
+        const gn=norm((c.autor||'').split(',').slice(1).join(' ')).charAt(0);
+        if(iniRef&&gn&&iniRef!==gn) return;   // misma apellido pero otra persona (inicial distinta)
+        const x=evalua(c,'fuerte',true); if(x) lib.push(x); });
+      lib.sort((a,b)=>b.clave-a.clave).slice(0,n).forEach(x=>res.push(x));
+      if(lib.length) aviso=(aviso?aviso+' · ':'')+'Ninguna obra coincide en título; se muestran obras del mismo autor (puede ser una traducción)';
+    } else aviso=(aviso?aviso+' · ':'')+`Autor con ${fuerte.size} registros en el catálogo y ninguno coincide en título`;
+  }
+  res.sort((a,b)=>b.clave-a.clave);
+  const cands=res.slice(0,n).map(x=>({...x.c,_score:Math.round(x.ts*100),_antigua:x.antigua,_nivel:x.verde?'verde':'ambar',_ev:x.ev}));
+  return {cands, aviso, hint:refTok.slice(0,4).join(' ')};
+}
+
+
+// ── Otras bibliotecas: mismo matcher por evidencias; cada coincidencia lleva título, autor, año y nivel ──
+function buscarEnOtrasBtcas(ref){
+  if(!dfCatOtras.length) return [];
+  const out=[];
+  for(const b of dfCatOtras){
+    const r=topCandidatos(ref,3,b.rows);
+    r.cands.filter(c=>c._score>=50||/solo autor/.test(c._ev||'')).forEach(c=>out.push({nombre:b.nombre,titulo:c.titulo,autor:c.autor,ano:c.ano,
+      numero_ejemplares:c.numero_ejemplares,score:c._score,_nivel:c._nivel,_ev:c._ev,_antigua:c._antigua}));
+  }
+  // si el libro ya apareció en alguna biblioteca, las obras "solo del mismo autor" de las demás son ruido
+  const hayBueno=out.some(o=>o.score>=70&&!/solo autor/.test(o._ev||''));
+  return hayBueno?out.filter(o=>!/solo autor/.test(o._ev||'')):out;
+}
+// Separa en "incluidas" (verde, una por biblioteca) y "sugeridas" (el resto, para que decida quien revisa)
+function repartirOtras(lista){
+  const inc=[], sug=[], conVerde=new Set();
+  (lista||[]).forEach(o=>{
+    if(o._nivel==='verde'&&!conVerde.has(o.nombre)){ conVerde.add(o.nombre); inc.push(o); } else sug.push(o);
+  });
+  return {inc, sug:sug.slice(0,4)};
+}
+function otrasHTML(item){
+  const inc=item.otras_btcas||[], sug=item.otras_sug||[];
+  if(!inc.length&&!sug.length) return '';
+  const btn=(txt,fn)=>`<button onclick="${fn}" style="margin-left:.5rem;padding:.2rem .55rem;font-size:.68rem;border:1px solid var(--blue);background:white;color:var(--blue);border-radius:4px;cursor:pointer;white-space:nowrap">${txt}</button>`;
+  const fila=(o,i,esInc)=>`<div class="candidate" style="cursor:default;margin:.2rem 0${esInc?'':';opacity:.9'}">
+      <div class="cand-score ${esInc?'high':'med'}" style="background:var(--blue)">${esInc?'✓':'?'}</div>
+      <div class="cand-info"><div class="cand-titulo">${escHTML(o.titulo||'—')}</div>
+      <div class="cand-meta">${escHTML(o.nombre)} · ${escHTML(o.autor||'—')} · ${o.ano||'s/f'}${o.score!==undefined&&o.score!==null&&o.score!==0?' · '+o.score+'%':''}${o._antigua?' · ⚠ edición anterior':''}${o._ev?' · <span style="opacity:.75">'+escHTML(o._ev)+'</span>':''}</div></div>
+      <div class="cand-ejemplares">${o.numero_ejemplares}<span>ej.</span></div>
+      ${esInc?btn('✕ quitar',`quitarOtra(${item.idx},${i})`):btn('+ incluir',`incluirOtra(${item.idx},${i})`)}
+    </div>`;
+  return `<div style="padding:.3rem 1rem .5rem">
+    <div style="font-size:.72rem;color:var(--blue);margin:.2rem 0">🏛 Otras bibliotecas${inc.length?' — incluidas en el informe':''}</div>
+    ${inc.map((o,i)=>fila(o,i,true)).join('')}
+    ${sug.length?`<div style="font-size:.7rem;color:var(--muted);margin:.4rem 0 .1rem">Posibles coincidencias (no incluidas hasta que las confirmes)</div>`+sug.map((o,i)=>fila(o,i,false)).join(''):''}
+  </div>`;
+}
+function quitarOtra(idx,i){
+  const it=items.find(x=>x.idx===idx); if(!it||!it.otras_btcas) return;
+  const o=it.otras_btcas.splice(i,1)[0]; if(!o) return;
+  it.otras_sug=it.otras_sug||[]; it.otras_sug.unshift(o);
+  reRenderCard(it); updateStats();
+}
+function incluirOtra(idx,i){
+  const it=items.find(x=>x.idx===idx); if(!it||!it.otras_sug) return;
+  const o=it.otras_sug.splice(i,1)[0]; if(!o) return;
+  it.otras_btcas=it.otras_btcas||[];
+  const mismas=it.otras_btcas.filter(x=>x.nombre===o.nombre);        // una por biblioteca: la anterior pasa a sugerida
+  it.otras_btcas=it.otras_btcas.filter(x=>x.nombre!==o.nombre);
+  mismas.forEach(x=>it.otras_sug.push(x));
+  it.otras_btcas.push(o);
+  reRenderCard(it); updateStats();
+}
+
+// ── Selección múltiple de ediciones: los ejemplares disponibles de las ediciones marcadas se suman ──
+function keyEd(c){ return norm(c.autor||'')+'|'+norm(c.titulo||'')+'|'+(c.ano||0); }
+function esSelManual(idx,c){ return (selectedCand[idx]||[]).some(s=>s.fromManual&&s.data&&keyEd(s.data)===keyEd(c)); }
+function seleccionDe(it){            // registros elegidos, sin duplicados
+  const m=new Map();
+  (selectedCand[it.idx]||[]).forEach(s=>{ const c=s.fromManual?s.data:it.candidatos[s.ci]; if(c&&!m.has(keyEd(c))) m.set(keyEd(c),c); });
+  return [...m.values()];
+}
+function selCand(idx,ci,fromManual=false,data=null){
+  if(!Array.isArray(selectedCand[idx])) selectedCand[idx]=[];
+  const lst=selectedCand[idx];
+  const k=lst.findIndex(s=>fromManual?(s.fromManual&&s.data&&keyEd(s.data)===keyEd(data)):(!s.fromManual&&s.ci===ci));
+  if(k>=0) lst.splice(k,1); else lst.push(fromManual?{ci,fromManual:true,data}:{ci,fromManual:false});
+  const el=document.getElementById((fromManual?'mcand_':'cand_')+idx+'_'+ci);
+  if(el) el.classList.toggle('selected',k<0);
+  refrescarBtnConfirmar(idx);
+}
+function selCandManual(idx,mi,data){ manualCandData[idx+'_'+mi]=data; selCand(idx,mi,true,data); }
+function quitarSelManual(idx,k){      // desmarcar una edición agregada a mano
+  const it=items.find(x=>x.idx===idx); const man=(selectedCand[idx]||[]).filter(s=>s.fromManual&&s.data);
+  const e=man[k]; if(!it||!e) return;
+  selectedCand[idx]=selectedCand[idx].filter(s=>s!==e); reRenderCard(it);
+}
+function filasManualesSel(item){      // ediciones agregadas a mano: se muestran marcadas aunque se vuelva a dibujar la tarjeta
+  return (selectedCand[item.idx]||[]).filter(s=>s.fromManual&&s.data).map((s,k)=>{
+    const c=s.data;
+    return `<div class="candidate selected" onclick="quitarSelManual(${item.idx},${k})"><span class="chk"></span>
+      <div class="cand-score med" style="background:var(--navy)">cat</div>
+      <div class="cand-info"><div class="cand-titulo">${escHTML(c.titulo||'—')}</div>
+      <div class="cand-meta">${escHTML(c.autor||'—')} · ${c.ano||'s/f'} · agregada manualmente</div></div>
+      <div class="cand-ejemplares">${c.numero_ejemplares}${c.total_ejemplares>c.numero_ejemplares?'/'+c.total_ejemplares:''}<span>ej.</span></div></div>`;
+  }).join('');
+}
+function combinarEdiciones(lst){
+  if(lst.length===1) return lst[0];
+  const ord=[...lst].sort((a,b)=>(a.ano||0)-(b.ano||0));
+  const suma=f=>ord.reduce((t,c)=>t+(parseInt(c[f])||0),0);
+  return {...ord[ord.length-1], ano:ord.map(c=>c.ano||'s/f').join(', '),
+          numero_ejemplares:suma('numero_ejemplares'), total_ejemplares:suma('total_ejemplares'),
+          prestamos:suma('prestamos'), _multi:ord};
+}
+function multiHTML(conf){
+  if(!conf||!conf._multi) return '';
+  return '<br/><span style="font-size:.72rem;color:var(--muted)">Ediciones sumadas: '+conf._multi.map(c=>(c.ano||'s/f')+' ×'+(parseInt(c.numero_ejemplares)||0)).join(' · ')+'</span>';
+}
+function confirmarSelected(idx){
+  const item=items.find(x=>x.idx===idx); if(!item) return;
+  const elegidas=seleccionDe(item);
+  if(!elegidas.length){
+    if((item.otras_btcas||[]).length){ item.estado='no'; item.confirmado=null; reRenderCard(item); updateStats(); return; }
+    alert('Selecciona un candidato del catálogo, o incluye una coincidencia de otra biblioteca.'); return;
+  }
+  item.confirmado=combinarEdiciones(elegidas);
+  item.estado='ok'; reRenderCard(item); updateStats();
+}
+// Etiqueta del botón "Confirmar": dice exactamente qué se va a contar
+function etiquetaConfirmar(it){
+  const u=seleccionDe(it);
+  if(u.length>=2) return '✓ Confirmar '+u.length+' ediciones ('+u.reduce((t,c)=>t+(parseInt(c.numero_ejemplares)||0),0)+' ej.)';
+  if(u.length===1) return '✓ Confirmar: "'+((u[0].titulo||'').substring(0,30))+'..."';
+  return (it.otras_btcas||[]).length?'✓ Confirmar: solo en otras bibliotecas':'✓ Confirmar seleccionado';
+}
+function refrescarBtnConfirmar(idx){
+  const it=items.find(x=>x.idx===idx), b=document.querySelector('#card_'+idx+' .btn-confirm');
+  if(it&&b) b.textContent=etiquetaConfirmar(it);
+}
+
+
 // Búsqueda automática en catálogos de otras bibliotecas
 // Devuelve [{nombre_btca, titulo, autor, ano, numero_ejemplares}]
 // Regla: autor (parcial) + título (cobertura) + año catálogo ≥ año referencia
-function buscarEnOtrasBtcas(ref){
+function buscarEnOtrasBtcas0(ref){
   if(!dfCatOtras.length) return [];
   const {autor, titulo, ano: anoRef}=extraerApa(ref);
   if(!titulo) return [];
@@ -991,15 +1348,15 @@ async function procesar(){
       const apellidos=apellidosDeAutor(parsed.autor||'');
       const debug=`Extraído → autor: "${parsed.autor||'?'}" | título: "${parsed.titulo||'?'}" | apellidos: [${apellidos.join(', ')||'?'}]`;
       const pr=planillaRefs[i]||{};
-      const otrasBtcas=(tipo==='Libro'||tipo==='Capítulo de libro')?buscarEnOtrasBtcas(ref):[];
+      const otrasRep=repartirOtras((tipo==='Libro'||tipo==='Capítulo de libro')?buscarEnOtrasBtcas(ref):[]);
       items.push({
         idx:i+1, ref, tipo, candidatos:cands, aviso, hint:hint||'', titulo:parsed.titulo,
         estado:'pend', confirmado:null, _debug:debug,
         tipo_biblio:pr.tipo_biblio||'básica',
         clave:pr.clave||'',
         nombre:pr.nombre||'',
-        otras_btcas:otrasBtcas,
-        _presel:(cands.length&&cands[0]._score>=80&&!cands[0]._antigua)?0:null
+        otras_btcas:otrasRep.inc, otras_sug:otrasRep.sug,
+        _presel:(cands.length&&cands[0]._nivel==='verde')?0:null
       });
       document.getElementById('gProgress').style.width=Math.round((i+1)/dfRefs.length*100)+'%';
       if(i%10===0) await new Promise(r=>setTimeout(r,0));
@@ -1059,7 +1416,7 @@ function renderCard(item){
       // Pre-selección automática
       const presel = item._presel;
       if(presel !== null && !(item.idx in selectedCand)){
-        selectedCand[item.idx] = { ci: presel, fromManual: false };
+        selectedCand[item.idx] = [{ ci: presel, fromManual: false }];
       }
       const selActual = selectedCand[item.idx];
 
@@ -1067,13 +1424,13 @@ function renderCard(item){
       let candsHTML='';
       if(item.candidatos.length){
         item.candidatos.forEach((c,ci)=>{
-          const esSel = selActual && !selActual.fromManual && selActual.ci===ci;
+          const esSel = (selActual||[]).some(s=>!s.fromManual&&s.ci===ci);
           const preTag = (ci===0 && presel!==null) ? ' <span style="font-size:.62rem;background:var(--navy);color:white;padding:.1rem .35rem;border-radius:3px;margin-left:.3rem">auto</span>' : '';
-          candsHTML+=`<div class="candidate${esSel?' selected':''}" id="cand_${item.idx}_${ci}" onclick="selCand(${item.idx},${ci})">
+          candsHTML+=`<div class="candidate${esSel?' selected':''}" id="cand_${item.idx}_${ci}" onclick="selCand(${item.idx},${ci})"><span class="chk"></span>
             <div class="cand-score ${scoreClass(c._score)}">${c._score}%</div>
             <div class="cand-info">
               <div class="cand-titulo">${c.titulo||'—'}${preTag}</div>
-              <div class="cand-meta">${c.autor||'—'} · ${c.ano||'s/f'}${c._antigua?' · ⚠ edición anterior':''}${c.prestamos?' · '+c.prestamos+' préstamos':''}</div>
+              <div class="cand-meta">${c.autor||'—'} · ${c.ano||'s/f'}${c._antigua?' · ⚠ edición anterior':''}${c._ev?' · <span style="opacity:.75">'+c._ev+'</span>':''}${c.prestamos?' · '+c.prestamos+' préstamos':''}</div>
             </div>
             <div class="cand-ejemplares">${c.numero_ejemplares}${c.total_ejemplares>c.numero_ejemplares?'/'+c.total_ejemplares:''}<span>ej.</span></div>
           </div>`;
@@ -1082,6 +1439,7 @@ function renderCard(item){
         const msg=item.aviso||'Sin candidatos automáticos.';
         candsHTML=`<div class="no-cands">⚠ ${msg}</div>`;
       }
+      candsHTML+=filasManualesSel(item);
 
       // Debug: qué extrajo el sistema
       const dbg=item._debug||'';
@@ -1092,7 +1450,7 @@ function renderCard(item){
       const manualResId=`manualRes_${item.idx}`;
 
       bodyHTML=`<div class="card-body">
-        <div class="candidates-title">Candidatos del catálogo — selecciona el correcto:</div>
+        <div class="candidates-title">Candidatos del catálogo — selecciona el correcto <span style="font-weight:400;text-transform:none;letter-spacing:0">(puedes marcar varias ediciones: se suman sus ejemplares)</span>:</div>
         ${dbgHTML}
         <div class="candidates" id="cands_${item.idx}">${candsHTML}</div>
 
@@ -1107,9 +1465,7 @@ function renderCard(item){
       </div>`;
 
       const burl=urlBuscalibre(item.titulo||item.ref.substring(0,60));
-      const confLabel = (selActual && !selActual.fromManual && item.candidatos[selActual.ci])
-        ? `✓ Confirmar: "${(item.candidatos[selActual.ci].titulo||'').substring(0,30)}..."`
-        : '✓ Confirmar seleccionado';
+      const confLabel = etiquetaConfirmar(item);
       actionsHTML=otrasPend(item)+`<div class="card-actions">
         <button class="btn-confirm" onclick="confirmarSelected(${item.idx})">${confLabel}</button>
         <button class="btn-notfound" onclick="marcarNoEncontrado(${item.idx})">✗ No está en catálogo</button>
@@ -1123,9 +1479,9 @@ function renderCard(item){
           + item.otras_btcas.map(o=>`${o.nombre}: ${o.numero_ejemplares} ej.`).join(' · ')
           + '</span>' : '';
       const banner=item.estado==='ok'
-        ? `<div class="resolved-banner show ok">✓ ${conf?.titulo||'—'} · ${conf?.autor||'—'} · ${conf?.ano||''} · ${conf?.numero_ejemplares||''} ej.${otrasBtcasHTML}</div>`
-        : `<div class="resolved-banner show no">✗ No encontrado en catálogo${otrasBtcasHTML}</div>`;
-      bodyHTML=banner;
+        ? `<div class="resolved-banner show ok">✓ ${conf?.titulo||'—'} · ${conf?.autor||'—'} · ${conf?.ano||''} · ${conf?.numero_ejemplares||''} ej.${multiHTML(conf)}</div>`
+        : `<div class="resolved-banner show no">✗ No encontrado en catálogo</div>`;
+      bodyHTML=banner+otrasHTML(item);
       const ob=item.tipo_biblio==='obligatoria';
       actionsHTML=`<div class="card-actions">
         <button class="btn-undo" onclick="deshacer(${item.idx})">↩ Deshacer</button>
@@ -1172,7 +1528,7 @@ function renderAll(){
 
 let selectedCand={}; // idx → ci
 
-function selCand(idx, ci, fromManual=false){
+function selCand0(idx, ci, fromManual=false){
   const item=items.find(x=>x.idx===idx); if(!item) return;
   selectedCand[idx]={ ci, fromManual };
   // Deselect todos los candidatos automáticos
@@ -1212,8 +1568,8 @@ function buscarManual(idx, inputId, resId){
   if(!resultados.length&&!otrasRes){ resDiv.innerHTML=`<div class="no-cands" style="margin-top:.3rem">Sin resultados en catálogo para "${q}"</div>`; return; }
 
   resDiv.innerHTML=resultados.map((r,mi)=>`
-    <div class="candidate" id="mcand_${idx}_${mi}" onclick="selCandManual(${idx},${mi},${JSON.stringify(r.c).replace(/"/g,'&quot;')})">
-      <div class="cand-score med" style="background:var(--navy)">cat</div>
+    <div class="candidate${esSelManual(idx,r.c)?' selected':''}" id="mcand_${idx}_${mi}" onclick="selCandManual(${idx},${mi},${JSON.stringify(r.c).replace(/"/g,'&quot;')})">
+      <span class="chk"></span><div class="cand-score med" style="background:var(--navy)">cat</div>
       <div class="cand-info">
         <div class="cand-titulo">${r.c.titulo||'—'}</div>
         <div class="cand-meta">${r.c.autor||'—'} · ${r.c.ano||'s/f'}</div>
@@ -1225,12 +1581,12 @@ function buscarManual(idx, inputId, resId){
 // Mapa temporal de candidatos manuales
 const manualCandData={};
 
-function selCandManual(idx, mi, data){
+function selCandManual0(idx, mi, data){
   manualCandData[`${idx}_${mi}`]=data;
   selCand(idx, mi, true);
 }
 
-function confirmarSelected(idx){
+function confirmarSelected0(idx){
   const item=items.find(x=>x.idx===idx); if(!item) return;
   const sel=selectedCand[idx];
   if(sel===undefined){ alert('Selecciona un candidato primero.'); return; }
@@ -1254,16 +1610,13 @@ function cambiarTipoRecurso(idx,nuevo){
   if(nuevo==='Libro'||nuevo==='Capítulo de libro'){
     const r=topCandidatos(item.ref,parseInt(document.getElementById('nCandidatos').value));
     item.candidatos=r.cands; item.aviso=r.aviso; item.hint=r.hint||'';
-    item.otras_btcas=buscarEnOtrasBtcas(item.ref);
-    item._presel=(r.cands.length&&r.cands[0]._score>=80&&!r.cands[0]._antigua)?0:null;
-  } else { item.candidatos=[]; item.otras_btcas=[]; item._presel=null; }
+    { const _r=repartirOtras(buscarEnOtrasBtcas(item.ref)); item.otras_btcas=_r.inc; item.otras_sug=_r.sug; }
+    item._presel=(r.cands.length&&r.cands[0]._nivel==='verde')?0:null;
+  } else { item.candidatos=[]; item.otras_btcas=[]; item.otras_sug=[]; item._presel=null; }
   reRenderCard(item); updateStats();
 }
 if(typeof setTipo==='undefined'){ window.setTipo=function(idx,t){ const it=items.find(x=>x.idx===idx); if(!it) return; it.tipo_biblio=t; reRenderCard(it); }; }
-function otrasPend(item){
-  if(!item.otras_btcas||!item.otras_btcas.length) return '';
-  return '<div style="color:var(--blue);font-size:.72rem;padding:.2rem 1rem">🏛 Otras bibliotecas: '+item.otras_btcas.map(o=>`${escHTML(o.nombre)}: ${o.numero_ejemplares} ej.`).join(' · ')+'</div>';
-}
+function otrasPend(item){ return otrasHTML(item); }
 const _manOtras={};
 function buscarManualOtras(idx,qn){
   const lst=[];
@@ -1416,7 +1769,7 @@ function exportar(){
 
         // Btca UA (col E)
         const ejUA = enc && !esArt && conf?.numero_ejemplares ? parseInt(conf.numero_ejemplares)||0 : 0;
-        const ejUAStr = ejUA ? String(ejUA)+(conf?.ano?' - '+conf.ano:'') : '';
+        const ejUAStr = ejUA ? (conf&&conf._multi ? ejUA+' ('+conf._multi.map(c=>(parseInt(c.numero_ejemplares)||0)+' - '+(c.ano||'s/f')).join(', ')+')' : String(ejUA)+(conf?.ano?' - '+conf.ano:'')) : '';
 
         // Otras Btcas (col F) — total con desglose por biblioteca
         const otrasList = item.otras_btcas||[];
